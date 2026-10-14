@@ -8,68 +8,34 @@
 // Results are exchanged through a temporary file (robust with any elevator).
 'use strict';
 
-const { execFileSync } = require('node:child_process');
+const { execFile } = require('node:child_process');
+const { promisify } = require('node:util');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 const platform = require('../platform');
 const ops = require('./esp-ops');
+const { commandFor } = require('./elevation');
+const execute = promisify(execFile);
 
 const HELPER = path.join(__dirname, '..', '..', 'bin', 'jemaos-quota-priv.js');
 
-function scan() {
-  return platform.listDevices();
-}
-
-function shquote(value) {
-  return `'${String(value).replace(/'/g, `'\\''`)}'`;
-}
-
-function psquote(value) {
-  return `'${String(value).replace(/'/g, `''`)}'`;
-}
-
-function runElevated(action, paramsFile, outFile) {
-  const helperArgs = [action, paramsFile, outFile];
-  // Inside Electron there is no separate `node` binary: the elevated helper
-  // must run through the Electron binary in Node mode.
-  const isElectron = Boolean(process.versions.electron);
-  switch (process.platform) {
-    case 'linux': {
-      const args = isElectron
-        ? ['env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, HELPER, ...helperArgs]
-        : [process.execPath, HELPER, ...helperArgs];
-      execFileSync('pkexec', args, { encoding: 'utf8' });
-      break;
+async function scan() {
+  try {
+    return platform.listDevices();
+  } catch (error) {
+    if (process.platform === 'win32' && error.code === 'ADMIN_REQUIRED') {
+      return runPrivileged('scan', {});
     }
-    case 'darwin': {
-      const parts = isElectron
-        ? ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, HELPER, ...helperArgs]
-        : [process.execPath, HELPER, ...helperArgs];
-      const cmd = parts.map(shquote).join(' ');
-      const script = `do shell script "${cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with administrator privileges`;
-      execFileSync('osascript', ['-e', script], { encoding: 'utf8' });
-      break;
-    }
-    case 'win32': {
-      const inner = isElectron
-        ? `set ELECTRON_RUN_AS_NODE=1&& "${process.execPath}" ${helperArgs.map(a => `"${a}"`).join(' ')}`
-        : `"${process.execPath}" ${helperArgs.map(a => `"${a}"`).join(' ')}`;
-      const realCmd =
-        `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath 'cmd.exe' ` +
-        `-ArgumentList '/c', ${psquote(inner)}`;
-      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', realCmd], {
-        encoding: 'utf8',
-      });
-      break;
-    }
-    default:
-      throw new Error(`Unsupported platform: ${process.platform}`);
+    throw error;
   }
 }
 
-function runPrivileged(action, params) {
+async function runPrivileged(action, params) {
+  if (!['scan', 'show', 'init'].includes(action) || !params || typeof params !== 'object' || Array.isArray(params)) {
+    throw new Error('Invalid privileged request');
+  }
   if (platform.isElevated()) {
     return ops[action](params);
   }
@@ -77,24 +43,51 @@ function runPrivileged(action, params) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-quota-'));
   const paramsFile = path.join(dir, 'params.json');
   const outFile = path.join(dir, 'out.json');
-  fs.writeFileSync(paramsFile, JSON.stringify(params));
   try {
-    runElevated(action, paramsFile, outFile);
-    if (!fs.existsSync(outFile)) {
-      throw new Error('Elevated operation did not return a result (authorization cancelled?)');
+    const request = action === 'scan' ? params : { ...params, keyFile: ops.resolveKey(params.keyFile) };
+    fs.writeFileSync(paramsFile, JSON.stringify(request), { flag: 'wx', mode: 0o600 });
+    const command = commandFor({
+      platform: process.platform,
+      executable: process.execPath,
+      helper: HELPER,
+      action,
+      paramsFile,
+      outFile,
+      electron: Boolean(process.versions.electron),
+      systemRoot: process.env.SystemRoot,
+    });
+    let launchError;
+    try {
+      await execute(command.file, command.args, { encoding: 'utf8', windowsHide: true });
+    } catch (error) {
+      launchError = error;
     }
-    const result = JSON.parse(fs.readFileSync(outFile, 'utf8'));
-    if (result && result.error) {
+    if (!fs.existsSync(outFile)) {
+      if (launchError && launchError.code === 'ENOENT') {
+        throw new Error('Authorization tool unavailable. Run the application as administrator.');
+      }
+      throw new Error(launchError
+        ? 'Authorization cancelled or privileged helper could not start.'
+        : 'Privileged helper returned no result.');
+    }
+    let result;
+    try {
+      result = JSON.parse(fs.readFileSync(outFile, 'utf8'));
+    } catch {
+      throw new Error('Privileged helper returned an invalid result.');
+    }
+    if (result && typeof result.error === 'string') {
       throw new Error(result.error);
     }
-    return result;
-  } catch (error) {
-    if (error.code === 'ENOENT') {
-      throw new Error(
-        'Elevation unavailable (pkexec/osascript/powershell missing). Run the app as administrator.'
-      );
+    if (launchError) {
+      throw new Error('Privileged helper reported a result but did not complete successfully.');
     }
-    throw error;
+    const valid = action === 'scan' ? Array.isArray(result)
+      : result && !Array.isArray(result) && typeof result.valid === 'boolean'
+        && (action !== 'show' || typeof result.present === 'boolean')
+        && (action !== 'init' || result.valid === true && Number.isSafeInteger(result.limit) && result.used === 0);
+    if (!valid) throw new Error('Privileged helper returned an unexpected result.');
+    return result;
   } finally {
     try {
       fs.rmSync(dir, { recursive: true, force: true });

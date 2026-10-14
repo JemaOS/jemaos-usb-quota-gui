@@ -7,6 +7,7 @@ const { execFileSync, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 
 function run(cmd, args) {
   return execFileSync(cmd, args, { encoding: 'utf8', timeout: 20000 });
@@ -20,10 +21,12 @@ function tryRun(cmd, args) {
 }
 
 function plistToJson(text) {
-  const res = spawnSync('plutil', ['-convert', 'json', '-o', '-', '-'], {
+  const res = spawnSync('/usr/bin/plutil', ['-convert', 'json', '-o', '-', '-'], {
     input: text,
     encoding: 'utf8',
+    timeout: 20000,
   });
+  if (res.error) throw res.error;
   if (res.status !== 0) {
     throw new Error(`plutil failed: ${res.stderr}`);
   }
@@ -36,8 +39,8 @@ function isElevated() {
 
 function isWritable(dir) {
   try {
-    const probe = path.join(dir, `.jemaos-quota.${process.pid}.tmp`);
-    fs.writeFileSync(probe, '');
+    const probe = path.join(dir, `.jemaos-quota.${randomUUID()}.tmp`);
+    fs.writeFileSync(probe, '', { flag: 'wx', mode: 0o600 });
     fs.unlinkSync(probe);
     return true;
   } catch {
@@ -46,30 +49,38 @@ function isWritable(dir) {
 }
 
 function diskInfo(id) {
-  const res = tryRun('diskutil', ['info', '-plist', id]);
-  if (!res.ok) {
-    return {};
-  }
-  try {
-    return plistToJson(res.out);
-  } catch {
-    return {};
-  }
+  return plistToJson(run('/usr/sbin/diskutil', ['info', '-plist', id]));
 }
 
 function listDevices() {
-  const list = plistToJson(run('diskutil', ['list', '-plist']));
+  const list = plistToJson(run('/usr/sbin/diskutil', ['list', '-plist']));
   const disks = list.AllDisksAndPartitions || [];
-  return disks.map(d => {
+  const root = diskInfo('/');
+  const bootDisks = new Set([root.ParentWholeDisk]);
+  if (String(root.FilesystemType || root.FileSystemPersonality || '').toLowerCase().includes('apfs')) {
+    const apfs = plistToJson(run('/usr/sbin/diskutil', ['apfs', 'list', '-plist']));
+    for (const container of apfs.Containers || []) {
+      if (container.ContainerReference === root.ParentWholeDisk || container.ContainerReference === root.APFSContainerReference) {
+        for (const store of container.PhysicalStores || []) {
+          bootDisks.add(String(store.DeviceIdentifier).replace(/s\d+.*$/, ''));
+        }
+      }
+    }
+  }
+  return disks.filter(d => /^disk\d+$/.test(d.DeviceIdentifier)).map(d => {
     const info = diskInfo(d.DeviceIdentifier);
+    const physical = info.VirtualOrPhysical === 'Physical';
     return {
       id: `/dev/${d.DeviceIdentifier}`,
       path: `/dev/${d.DeviceIdentifier}`,
       name: d.DeviceIdentifier,
       size: Number(d.Size) || Number(info.TotalSize) || 0,
       model: String(info.MediaName || '').trim(),
-      removable: info.RemovableMedia === true || info.Internal === false,
+      removable: info.Internal === false && physical,
       transport: String(info.BusProtocol || '').toUpperCase(),
+      systemDisk: Boolean(info.Internal || bootDisks.has(d.DeviceIdentifier)),
+      identity: JSON.stringify([d.DeviceIdentifier, info.MediaUUID || info.DiskUUID || info.SerialNumber || '', Number(d.Size),
+        (d.Partitions || []).filter(p => p.Content === 'EFI').map(p => [p.DeviceIdentifier, p.Size, p.VolumeUUID || ''])]),
       partitions: (d.Partitions || []).map(p => ({
         id: `/dev/${p.DeviceIdentifier}`,
         path: `/dev/${p.DeviceIdentifier}`,
@@ -78,48 +89,85 @@ function listDevices() {
         partType: String(p.Content || '').toLowerCase(),
         mountpoint: p.MountPoint || null,
         esp: String(p.Content || '').toUpperCase() === 'EFI',
+        diskId: d.DeviceIdentifier,
+        uuid: p.VolumeUUID || '',
       })),
     };
   });
 }
 
 function espPartition(disk) {
-  return disk ? disk.partitions.find(p => p.esp) || null : null;
+  const parts = disk ? disk.partitions.filter(p => p.esp) : [];
+  return parts.length === 1 ? parts[0] : null;
+}
+
+function assertPartition(partition, info) {
+  if (!/^\/dev\/disk\d+s\d+$/.test(partition.path)
+      || info.DeviceIdentifier !== partition.path.slice(5)
+      || info.ParentWholeDisk !== partition.diskId
+      || String(info.Content || '').toUpperCase() !== 'EFI'
+      || partition.uuid && info.VolumeUUID !== partition.uuid) {
+    throw new Error('The selected EFI partition changed; no changes were made.');
+  }
+}
+
+function assertMount(partition, mountDir) {
+  assertPartition(partition, diskInfo(mountDir));
 }
 
 function mountEsp(partition) {
   const shortId = partition.path.replace('/dev/', '');
   const before = diskInfo(shortId);
+  assertPartition(partition, before);
   if (before.MountPoint) {
+    assertMount(partition, before.MountPoint);
+    if (!isWritable(before.MountPoint)) throw new Error('The EFI partition is read-only.');
     return { mountDir: before.MountPoint, owned: false };
   }
 
-  tryRun('diskutil', ['mount', partition.path]);
-  let info = diskInfo(shortId);
-  let mountDir = info.MountPoint;
-
-  if (!mountDir) {
-    // Fallback: mount the FAT partition manually.
-    mountDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-esp-'));
-    const res = tryRun('mount', ['-t', 'msdos', partition.path, mountDir]);
-    if (!res.ok) {
-      throw new Error(`Could not mount ${partition.path}: ${res.error.message}`);
+  const handle = { owned: false, mountDir: null, handle: { partition, createdDir: null } };
+  try {
+    const attempt = tryRun('/usr/sbin/diskutil', ['mount', partition.path]);
+    handle.owned = attempt.ok;
+    const after = diskInfo(shortId);
+    assertPartition(partition, after);
+    handle.mountDir = after.MountPoint;
+    if (!handle.mountDir) {
+      if (attempt.ok) throw new Error('diskutil reported a mount without a usable mount point.');
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-esp-'));
+      handle.handle.createdDir = dir;
+      run('/sbin/mount', ['-t', 'msdos', partition.path, dir]);
+      handle.owned = true;
+      handle.mountDir = dir;
     }
+    assertMount(partition, handle.mountDir);
+    if (!isWritable(handle.mountDir)) throw new Error('The EFI partition is read-only.');
+    return handle;
+  } catch (error) {
+    try { unmountEsp(handle); }
+    catch (cleanup) { error.message += ` (cleanup: ${cleanup.message})`; }
+    throw error;
   }
-  if (!isWritable(mountDir)) {
-    throw new Error(`ESP mounted but not writable: ${mountDir}`);
-  }
-  return { mountDir, owned: true, handle: { device: partition.path, mountDir } };
 }
 
 function unmountEsp(handle) {
-  if (!handle || !handle.owned || !handle.handle) {
+  if (!handle || !handle.handle) {
     return;
   }
-  const res = tryRun('diskutil', ['unmount', handle.handle.mountDir]);
-  if (!res.ok) {
-    tryRun('umount', [handle.handle.mountDir]);
+  const { partition, createdDir } = handle.handle;
+  if (handle.owned) {
+    const before = diskInfo(partition.path);
+    assertPartition(partition, before);
+    if (before.MountPoint) {
+      if (handle.mountDir && path.resolve(before.MountPoint) !== path.resolve(handle.mountDir)) {
+        throw new Error('Mount changed; refusing to unmount another session.');
+      }
+      const res = tryRun('/usr/sbin/diskutil', ['unmount', partition.path]);
+      if (!res.ok) run('/sbin/umount', [before.MountPoint]);
+      if (diskInfo(partition.path).MountPoint) throw new Error('Could not unmount the temporary EFI volume.');
+    }
   }
+  if (createdDir) fs.rmdirSync(createdDir);
 }
 
 module.exports = {

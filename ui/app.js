@@ -33,6 +33,7 @@ const I18N = {
     noCount: 'Aucun compteur',
     error: 'Erreur',
     bannerAdmin: 'Lance l’application en tant qu’administrateur (UAC) pour écrire sur la clé.',
+    bridgeUnavailable: 'Le module natif est indisponible. Réinstalle l’application Quota JemaOS.',
     bannerNoKey: 'Clé HMAC (jemaos-quota.key) introuvable — impossible de signer.',
     initOk: 'Clé initialisée : {limit} installations (0 utilisée), signature valide.',
   },
@@ -67,12 +68,13 @@ const I18N = {
     noCount: 'No counter',
     error: 'Error',
     bannerAdmin: 'Run the app as administrator (UAC) to write on the key.',
+    bridgeUnavailable: 'The native module is unavailable. Reinstall the Quota JemaOS application.',
     bannerNoKey: 'HMAC key (jemaos-quota.key) not found — cannot sign.',
     initOk: 'Key initialized: {limit} installs (0 used), valid signature.',
   },
 };
 
-const state = { devices: [], selected: null, meta: null, status: null, lang: 'fr' };
+const state = { devices: [], selected: null, meta: null, status: null, lang: 'fr', busy: false };
 
 const el = (id) => document.getElementById(id);
 const t = (key, params) => {
@@ -105,33 +107,14 @@ function applyI18n() {
   el('lang').textContent = t('langToggle');
 }
 
-// ---- api (IPC in the native app, fetch in the web-server mode) -----------
+// ---- native IPC ---------------------------------------------------------
 const bridge = typeof window !== 'undefined' && window.jemaos ? window.jemaos : null;
 
 async function invoke(action, payload) {
-  if (bridge) {
-    return bridge.invoke(action, payload);
+  if (!bridge) {
+    throw new Error(t('bridgeUnavailable'));
   }
-  const routes = {
-    meta: { method: 'GET', path: '/api/meta' },
-    devices: { method: 'GET', path: '/api/devices' },
-    show: { method: 'POST', path: '/api/show' },
-    init: { method: 'POST', path: '/api/init' },
-  };
-  const route = routes[action];
-  const res = await fetch(
-    route.path,
-    route.method === 'POST'
-      ? {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload || {}),
-        }
-      : { method: 'GET' }
-  );
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
+  return bridge.invoke(action, payload);
 }
 
 function fmtSize(bytes) {
@@ -163,13 +146,20 @@ function renderDevices() {
     const esp = hasEsp(disk);
     const row = document.createElement('div');
     row.className = `device${esp ? '' : ' disabled'}${state.selected === disk.id ? ' selected' : ''}`;
-    row.innerHTML = `
-      <span class="dot"></span>
-      <span>
-        <span class="name">${disk.model || disk.name || disk.id}</span>
-        <span class="meta">${disk.id}${fmtSize(disk.size) ? ' · ' + fmtSize(disk.size) : ''}${disk.transport ? ' · ' + disk.transport : ''}</span>
-      </span>
-      <span class="tag ${esp ? '' : 'noesp'}">${esp ? t('tagEsp') : t('tagNoEsp')}</span>`;
+    const dot = document.createElement('span');
+    dot.className = 'dot';
+    const details = document.createElement('span');
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = disk.model || disk.name || disk.id;
+    const meta = document.createElement('span');
+    meta.className = 'meta';
+    meta.textContent = `${disk.id}${fmtSize(disk.size) ? ' · ' + fmtSize(disk.size) : ''}${disk.transport ? ' · ' + disk.transport : ''}`;
+    details.append(name, meta);
+    const tag = document.createElement('span');
+    tag.className = `tag ${esp ? '' : 'noesp'}`;
+    tag.textContent = esp ? t('tagEsp') : t('tagNoEsp');
+    row.append(dot, details, tag);
     if (esp) row.addEventListener('click', () => selectDevice(disk.id));
     list.appendChild(row);
   }
@@ -181,7 +171,8 @@ async function selectDevice(id) {
   updateActionState();
   hideBanner();
   try {
-    state.status = await invoke('show', { device: id });
+    const disk = state.devices.find(d => d.id === id);
+    state.status = await invoke('show', { device: id, identity: disk && disk.identity });
     renderStatus(state.status);
   } catch (error) {
     state.status = null;
@@ -194,58 +185,72 @@ function renderStatus(status) {
   const card = el('status-card');
   card.classList.remove('hidden');
   el('status-title').textContent = status.present ? t('statusCurrent') : t('statusNone');
-  const grid = el('status-grid');
   if (!status.present) {
-    grid.innerHTML = `<dt>${t('noCount')}</dt><dd class="bad">${t('notInit')}</dd>`;
+    renderStatusRows([[t('noCount'), t('notInit'), 'bad']]);
     return;
   }
-  grid.innerHTML = `
-    <dt>${t('fieldEsp')}</dt><dd>${status.esp}</dd>
-    <dt>${t('fieldLimit')}</dt><dd>${status.limit}</dd>
-    <dt>${t('fieldUsed')}</dt><dd>${status.used}</dd>
-    <dt>${t('fieldSig')}</dt><dd class="${status.valid ? 'good' : 'bad'}">${status.valid ? t('valid') : t('invalid')}</dd>`;
+  renderStatusRows([
+    [t('fieldEsp'), status.esp],
+    [t('fieldLimit'), status.limit],
+    [t('fieldUsed'), status.used],
+    [t('fieldSig'), status.valid ? t('valid') : t('invalid'), status.valid ? 'good' : 'bad'],
+  ]);
+}
+
+function renderStatusRows(rows) {
+  const grid = el('status-grid');
+  grid.replaceChildren();
+  for (const [label, value, className = ''] of rows) {
+    const term = document.createElement('dt');
+    term.textContent = label;
+    const detail = document.createElement('dd');
+    detail.textContent = String(value);
+    detail.className = className;
+    grid.append(term, detail);
+  }
 }
 
 function renderStatusError(message) {
   const card = el('status-card');
   card.classList.remove('hidden');
   el('status-title').textContent = t('statusError');
-  el('status-grid').innerHTML = `<dt>${t('error')}</dt><dd class="bad">${message}</dd>`;
+  renderStatusRows([[t('error'), message, 'bad']]);
 }
 
 // ---- actions -------------------------------------------------------------
 function updateActionState() {
   const btn = el('init-btn');
   const hint = el('action-hint');
-  const platform = state.meta ? state.meta.platform : null;
   const elevated = Boolean(state.meta && state.meta.elevated);
-  const canElevate = platform !== 'win32';
-  btn.disabled = !(state.selected && (elevated || canElevate));
+  btn.disabled = state.busy || !(state.selected && state.meta && state.meta.keyPresent && currentLimit() !== null);
 
   if (!state.selected) hint.textContent = t('hintSelect');
-  else if (!elevated && !canElevate) hint.textContent = t('hintAdmin');
   else if (!elevated) hint.textContent = t('hintElevate');
   else hint.textContent = t('hintReady');
 }
 
 function currentLimit() {
-  const n = Number.parseInt(el('limit').value, 10);
-  return Number.isInteger(n) && n >= 0 ? n : null;
+  const value = el('limit').value.trim();
+  const n = Number(value);
+  return value !== '' && Number.isSafeInteger(n) && n >= 0 ? n : null;
 }
 
 async function doInit() {
   const limit = currentLimit();
-  if (limit === null || !state.selected) return;
+  if (limit === null || !state.selected || state.busy) return;
+  state.busy = true;
   const btn = el('init-btn');
   btn.disabled = true;
   btn.textContent = t('initBusy');
   try {
-    const result = await invoke('init', { device: state.selected, limit });
-    showBanner(t('initOk', { limit: result.limit }), 'ok');
+    const disk = state.devices.find(d => d.id === state.selected);
+    const result = await invoke('init', { device: state.selected, identity: disk && disk.identity, limit });
     await selectDevice(state.selected);
+    showBanner(t('initOk', { limit: result.limit }), 'ok');
   } catch (error) {
     showBanner(error.message, 'error');
   } finally {
+    state.busy = false;
     btn.textContent = t('initBtn');
     updateActionState();
   }
@@ -255,16 +260,20 @@ async function doInit() {
 function wireEvents() {
   el('limit-dec').addEventListener('click', () => {
     el('limit').value = Math.max(0, (currentLimit() ?? 0) - 1);
+    updateActionState();
   });
   el('limit-inc').addEventListener('click', () => {
     el('limit').value = (currentLimit() ?? 0) + 1;
+    updateActionState();
   });
   document.querySelectorAll('.chip').forEach(chip => {
     chip.addEventListener('click', () => {
       el('limit').value = chip.dataset.limit;
+      updateActionState();
     });
   });
   el('init-btn').addEventListener('click', doInit);
+  el('limit').addEventListener('input', updateActionState);
 
   el('theme').addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -292,9 +301,6 @@ async function main() {
 
   try {
     state.meta = await invoke('meta');
-    if (state.meta.needsElevation && !state.meta.elevated && state.meta.platform === 'win32') {
-      showBanner(t('bannerAdmin'));
-    }
     if (!state.meta.keyPresent) {
       showBanner(t('bannerNoKey'), 'error');
     }
@@ -304,14 +310,12 @@ async function main() {
 
   try {
     const res = await invoke('devices');
-    state.devices = Array.isArray(res) ? res : res.devices;
+    state.devices = (Array.isArray(res) ? res : res.devices)
+      .filter(d => d.removable && !d.systemDisk);
     renderDevices();
-    // Auto-select the most likely key (removable USB with an ESP) so the user
-    // only has to set the limit and click. Falls back to any disk with an ESP.
+    // Never fall back to an internal/system disk when no USB key is connected.
     if (!state.selected) {
-      const pick =
-        state.devices.find(d => d.removable && d.partitions.some(p => p.esp)) ||
-        state.devices.find(d => d.partitions.some(p => p.esp));
+      const pick = state.devices.find(d => d.partitions.filter(p => p.esp).length === 1);
       if (pick) {
         await selectDevice(pick.id);
       }

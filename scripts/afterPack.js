@@ -28,7 +28,15 @@ module.exports = async function afterPack(context) {
   fs.renameSync(binPath, realPath);
   fs.writeFileSync(
     binPath,
-    `#!/bin/sh\nexec "$(dirname "$0")/${exeName}-bin" --no-sandbox "$@"\n`,
+    `#!/bin/sh
+set -eu
+# /usr/bin/quota-jemaos is an alternatives symlink, not the app directory.
+launcher=$(readlink -f -- "$0")
+app_dir=$(dirname -- "$launcher")
+# A VS Code terminal may inherit Electron's Node-only mode.
+unset ELECTRON_RUN_AS_NODE
+exec "$app_dir/${exeName}-bin" --no-sandbox "$@"
+`,
     { mode: 0o755 }
   );
   fs.chmodSync(binPath, 0o755);

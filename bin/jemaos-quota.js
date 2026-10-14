@@ -22,18 +22,18 @@ function parseFlags(argv) {
   return flags;
 }
 
-function main() {
+async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const flags = parseFlags(rest);
   const opts = { device: flags.device, limit: flags.limit, keyFile: flags.key };
   try {
     let result;
     if (cmd === 'list') {
-      result = service.scan();
+      result = await service.scan();
     } else if (cmd === 'init') {
-      result = service.init(opts);
+      result = await service.init(opts);
     } else if (cmd === 'show') {
-      result = service.show(opts);
+      result = await service.show(opts);
     } else {
       usage();
     }

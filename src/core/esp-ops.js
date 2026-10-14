@@ -14,7 +14,11 @@ const { loadKey } = require('./crypto');
 const DEFAULT_KEY = path.join(__dirname, '..', '..', 'resources', 'jemaos-quota.key');
 
 function resolveKey(keyFile) {
-  return keyFile || process.env.JEMAOS_QUOTA_KEY || DEFAULT_KEY;
+  return path.resolve(keyFile || process.env.JEMAOS_QUOTA_KEY || DEFAULT_KEY);
+}
+
+function scan() {
+  return platform.listDevices();
 }
 
 function findDisk(device) {
@@ -25,25 +29,43 @@ function findDisk(device) {
   );
 }
 
-function withEsp(device, fn) {
+function withEsp({ device, identity }, fn) {
   const disk = findDisk(device);
   if (!disk) {
     throw new Error(`Device not found: ${device}`);
+  }
+  if (!disk.removable || disk.systemDisk) {
+    throw new Error('Select an external USB key, not an internal or system disk.');
+  }
+  if (identity !== undefined && identity !== disk.identity) {
+    throw new Error('The selected device changed. Refresh the device list before continuing.');
+  }
+  if (disk.partitions.filter(p => p.esp).length > 1) {
+    throw new Error('Several EFI partitions found. The target is ambiguous; no changes were made.');
   }
   const esp = platform.espPartition(disk);
   if (!esp) {
     throw new Error(`No EFI System Partition found on ${device}`);
   }
   const handle = platform.mountEsp(esp);
+  let operationError;
   try {
     return fn(handle.mountDir, esp);
+  } catch (error) {
+    operationError = error;
+    throw error;
   } finally {
-    platform.unmountEsp(handle);
+    try {
+      platform.unmountEsp(handle);
+    } catch (error) {
+      if (operationError) operationError.message += ` (cleanup: ${error.message})`;
+      else throw error;
+    }
   }
 }
 
-function show({ device, keyFile } = {}) {
-  return withEsp(device, (mountDir, esp) => {
+function show({ device, identity, keyFile } = {}) {
+  return withEsp({ device, identity }, (mountDir, esp) => {
     const file = quota.quotaPath(mountDir);
     if (!fs.existsSync(file)) {
       return { esp: esp.id, present: false, valid: false };
@@ -62,13 +84,13 @@ function show({ device, keyFile } = {}) {
   });
 }
 
-function init({ device, limit, keyFile } = {}) {
+function init({ device, identity, limit, keyFile } = {}) {
   const n = Number(limit);
-  if (!Number.isInteger(n) || n < 0) {
+  if (!(typeof limit === 'number' || typeof limit === 'string' && /^\d+$/.test(limit)) || !Number.isSafeInteger(n) || n < 0) {
     throw new Error('limit must be a non-negative integer');
   }
-  const key = loadKey(resolveKey(keyFile));
-  return withEsp(device, (mountDir, esp) => {
+  return withEsp({ device, identity }, (mountDir, esp) => {
+    const key = loadKey(resolveKey(keyFile));
     const file = quota.quotaPath(mountDir);
     quota.writeAtomic(file, quota.render(n, 0, key));
     const verified = quota.verify(fs.readFileSync(file, 'utf8'), key);
@@ -79,4 +101,4 @@ function init({ device, limit, keyFile } = {}) {
   });
 }
 
-module.exports = { show, init, resolveKey, DEFAULT_KEY };
+module.exports = { scan, show, init, resolveKey, DEFAULT_KEY };
