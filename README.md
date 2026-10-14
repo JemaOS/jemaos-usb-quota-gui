@@ -55,13 +55,27 @@ Aucune dépendance externe.
 
 ## Démarrage
 
-### 1) Application web locale (le plus simple)
+> **Web app universelle.** L’outil est une **application web locale** : un petit
+> serveur Node sur `127.0.0.1` + l’UI dans **ton** navigateur. **Une seule base
+> de code** → **tous les OS**. Le navigateur n’a jamais accès aux disques
+> (sandbox) : c’est le serveur local qui monte l’ESP, et l’**élévation** se fait
+> **par opération** (pkexec / UAC / osascript).
+> ⚠️ Une **web app hébergée** (site en ligne) est **impossible** pour cette tâche
+> (pas d’accès aux partitions, pas de root).
+
+### 1) Lanceur universel (le plus simple) — Linux / macOS / Windows
 ```bash
-sudo node server.js         # droits admin requis pour monter l'ESP
-# puis ouvre http://127.0.0.1:8770
+node bin/jemaos-quota-app.js      # démarre le serveur + ouvre le navigateur
+# ou
+npm start
 ```
 
-### 2) CLI (headless / script)
+### 2) Serveur seul (UI dans le navigateur)
+```bash
+node server.js                    # puis http://127.0.0.1:8770
+```
+
+### 3) CLI (headless / script)
 ```bash
 sudo node bin/jemaos-quota.js list
 sudo node bin/jemaos-quota.js show --device /dev/sda
@@ -69,7 +83,7 @@ sudo node bin/jemaos-quota.js init --device /dev/sda --limit 100
 ```
 Options : `--key <fichier>` (ou `JEMAOS_QUOTA_KEY`).
 
-### 3) Application de bureau (Electron)
+### 4) Application de bureau (Electron)
 ```bash
 npm install                 # installe Electron (dev)
 npm run electron            # fenêtre native

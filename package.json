@@ -9,7 +9,8 @@
     "jemaos-quota": "bin/jemaos-quota.js"
   },
   "scripts": {
-    "start": "node server.js",
+    "start": "node bin/jemaos-quota-app.js",
+    "serve": "node server.js",
     "cli": "node bin/jemaos-quota.js",
     "test": "node --test test/",
     "electron": "electron .",
