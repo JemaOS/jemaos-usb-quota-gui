@@ -48,7 +48,10 @@
         "deb"
       ],
       "category": "Utility",
-      "maintainer": "JemaOS <dev@jematech.fr>"
+      "maintainer": "JemaOS <dev@jematech.fr>",
+      "executableArgs": [
+        "--no-sandbox"
+      ]
     },
     "mac": {
       "target": [
