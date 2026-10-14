@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Quota JemaOS</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="logo" aria-hidden="true">Q</div>
+        <div class="brand-text">
+          <h1>Quota JemaOS</h1>
+          <p class="sub">Provisionner le quota d’installation signé sur une clé USB</p>
+        </div>
+      </div>
+      <span id="platform-pill" class="pill">…</span>
+    </header>
+
+    <div id="banner" class="banner hidden" role="alert"></div>
+
+    <section class="card">
+      <div class="card-head"><span class="step">1</span><h2>Choisir la clé USB</h2></div>
+      <div id="device-list" class="device-list">
+        <div class="empty">Recherche des périphériques…</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><span class="step">2</span><h2>Limite d’installations</h2></div>
+      <div class="limit-row">
+        <button id="limit-dec" class="round" type="button" aria-label="Diminuer">–</button>
+        <input id="limit" type="number" min="0" step="1" value="100" inputmode="numeric" />
+        <button id="limit-inc" class="round" type="button" aria-label="Augmenter">+</button>
+      </div>
+      <div class="presets">
+        <button class="chip" data-limit="1" type="button">1</button>
+        <button class="chip" data-limit="10" type="button">10</button>
+        <button class="chip" data-limit="50" type="button">50</button>
+        <button class="chip" data-limit="100" type="button">100</button>
+      </div>
+      <p class="hint">Nombre maximum d’installations autorisées pour cette clé.</p>
+    </section>
+
+    <section class="card actions">
+      <button id="init-btn" class="primary" type="button" disabled>Initialiser la clé</button>
+      <p class="hint center" id="action-hint">Sélectionne une clé pour continuer.</p>
+    </section>
+
+    <section id="status-card" class="card hidden">
+      <div class="card-head"><span class="step ok" id="status-badge">i</span><h2 id="status-title">État de la clé</h2></div>
+      <dl id="status-grid" class="grid"></dl>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
