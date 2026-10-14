@@ -32,6 +32,7 @@
     "appId": "fr.jematech.jemaos.quota",
     "productName": "Quota JemaOS",
     "executableName": "quota-jemaos",
+    "afterPack": "scripts/afterPack.js",
     "asar": false,
     "electronVersion": "31.7.7",
     "files": [
