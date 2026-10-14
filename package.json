@@ -98,6 +98,9 @@
     "portable": {
       "artifactName": "Quota-JemaOS-${version}-windows-${arch}-Portable.exe",
       "requestExecutionLevel": "user"
+    },
+    "appImage": {
+      "artifactName": "Quota-JemaOS-${version}-linux-${arch}.AppImage"
     }
   }
 }
