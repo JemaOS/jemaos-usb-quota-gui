@@ -101,6 +101,10 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/' || pathname === '/index.html') {
       return sendFile(res, path.join(UI_DIR, 'index.html'));
     }
+    if (pathname === '/favicon.ico') {
+      res.writeHead(204);
+      return res.end();
+    }
     const filePath = path.join(UI_DIR, path.normalize(pathname).replace(/^(\.\.[/\\])+/, ''));
     return sendFile(res, filePath);
   } catch (error) {

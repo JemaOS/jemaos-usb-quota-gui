@@ -1,87 +1,60 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
-// Orchestration: scan devices, and init/show the signed quota on a key.
+// Orchestration: scan devices, and init/show the signed quota.
+//
+// When the process is NOT elevated, the privileged ESP operation is delegated
+// to the elevated helper (bin/jemaos-quota-priv.js) via the platform elevator
+// (pkexec on Linux/macOS, UAC relaunch on Windows) so the whole app does not
+// need to run as root.
 'use strict';
 
-const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const path = require('node:path');
 
 const platform = require('../platform');
-const quota = require('./quota');
-const { loadKey } = require('./crypto');
+const ops = require('./esp-ops');
 
-const DEFAULT_KEY = path.join(__dirname, '..', '..', 'resources', 'jemaos-quota.key');
-
-function resolveKey(keyFile) {
-  return keyFile || process.env.JEMAOS_QUOTA_KEY || DEFAULT_KEY;
-}
+const PRIV_HELPER = path.join(__dirname, '..', '..', 'bin', 'jemaos-quota-priv.js');
 
 function scan() {
   return platform.listDevices();
 }
 
-function findDisk(device) {
-  const wanted = String(device);
-  return (
-    platform
-      .listDevices()
-      .find(d => d.id === wanted || d.path === wanted || d.name === wanted) || null
-  );
+function elevator() {
+  if (process.platform === 'win32') {
+    return null; // handled by electron-builder manifest / manual elevation
+  }
+  return 'pkexec';
 }
 
-function withEsp(device, fn) {
-  const disk = findDisk(device);
-  if (!disk) {
-    throw new Error(`Device not found: ${device}`);
+function runPrivileged(action, params) {
+  if (platform.isElevated()) {
+    return ops[action](params);
   }
-  const esp = platform.espPartition(disk);
-  if (!esp) {
-    throw new Error(`No EFI System Partition found on ${device}`);
+  const tool = elevator();
+  if (!tool) {
+    throw new Error('Administrator privileges required. Restart the app as administrator.');
   }
-  const handle = platform.mountEsp(esp);
   try {
-    return fn(handle.mountDir, esp);
-  } finally {
-    platform.unmountEsp(handle);
+    const out = execFileSync(tool, [process.execPath, PRIV_HELPER, action, JSON.stringify(params)], {
+      encoding: 'utf8',
+    });
+    return JSON.parse(out);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      throw new Error(
+        `Élévation indisponible (${tool} absent). Relance l’application en administrateur : sudo node server.js`
+      );
+    }
+    throw new Error(String((error.stderr || error.message || '').trim()));
   }
 }
 
-/** Read + verify the current quota (if any). */
-function show({ device, keyFile } = {}) {
-  return withEsp(device, (mountDir, esp) => {
-    const file = quota.quotaPath(mountDir);
-    if (!fs.existsSync(file)) {
-      return { esp: esp.id, present: false, valid: false };
-    }
-    const content = fs.readFileSync(file, 'utf8');
-    const key = loadKey(resolveKey(keyFile));
-    const verified = quota.verify(content, key);
-    const parsed = quota.parse(content) || {};
-    return {
-      esp: esp.id,
-      present: true,
-      valid: Boolean(verified),
-      limit: verified ? verified.limit : parsed.limit ?? null,
-      used: verified ? verified.used : parsed.used ?? null,
-    };
-  });
+function show(params = {}) {
+  return runPrivileged('show', params);
 }
 
-/** Write a fresh signed counter (used=0, limit=N) and verify it. */
-function init({ device, limit, keyFile } = {}) {
-  const n = Number(limit);
-  if (!Number.isInteger(n) || n < 0) {
-    throw new Error('limit must be a non-negative integer');
-  }
-  const key = loadKey(resolveKey(keyFile));
-  return withEsp(device, (mountDir, esp) => {
-    const file = quota.quotaPath(mountDir);
-    quota.writeAtomic(file, quota.render(n, 0, key));
-    const verified = quota.verify(fs.readFileSync(file, 'utf8'), key);
-    if (!verified) {
-      throw new Error('Post-write verification failed');
-    }
-    return { esp: esp.id, limit: verified.limit, used: verified.used, valid: true };
-  });
+function init(params = {}) {
+  return runPrivileged('init', params);
 }
 
-module.exports = { scan, show, init, resolveKey };
+module.exports = { scan, show, init, resolveKey: ops.resolveKey };

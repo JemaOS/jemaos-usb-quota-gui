@@ -103,13 +103,17 @@ function renderStatusError(message) {
 function updateActionState() {
   const btn = el('init-btn');
   const hint = el('action-hint');
-  const elevated = state.meta && state.meta.elevated;
-  const ready = state.selected && elevated;
-  btn.disabled = !ready;
-  if (!state.meta || !state.meta.elevated) {
-    hint.textContent = 'Autorisations administrateur requises pour écrire sur la clé.';
-  } else if (!state.selected) {
+  const platform = state.meta ? state.meta.platform : null;
+  const elevated = Boolean(state.meta && state.meta.elevated);
+  const canElevate = platform !== 'win32'; // pkexec handles it on Linux/macOS
+  btn.disabled = !(state.selected && (elevated || canElevate));
+
+  if (!state.selected) {
     hint.textContent = 'Sélectionne une clé pour continuer.';
+  } else if (!elevated && !canElevate) {
+    hint.textContent = 'Lance l’application en tant qu’administrateur (UAC).';
+  } else if (!elevated) {
+    hint.textContent = 'Une demande d’autorisation (administrateur) s’affichera à l’écriture.';
   } else {
     hint.textContent = 'Prêt à écrire le compteur signé.';
   }
@@ -166,8 +170,8 @@ async function main() {
   try {
     state.meta = await api('/api/meta');
     el('platform-pill').textContent = state.meta.platform;
-    if (state.meta.needsElevation && !state.meta.elevated) {
-      showBanner('Lance l’application avec les droits administrateur (sudo / UAC) pour pouvoir monter et écrire sur la clé.');
+    if (state.meta.needsElevation && !state.meta.elevated && state.meta.platform === 'win32') {
+      showBanner('Lance l’application en tant qu’administrateur (UAC) pour écrire sur la clé.');
     }
     if (!state.meta.keyPresent) {
       showBanner('Clé HMAC (jemaos-quota.key) introuvable — impossible de signer.', 'error');
