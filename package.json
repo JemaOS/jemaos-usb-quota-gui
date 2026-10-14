@@ -4,6 +4,11 @@
   "private": true,
   "description": "Cross-platform tool to provision the signed JemaOS USB installation quota (Linux / macOS / Windows)",
   "license": "BSD-3-Clause",
+  "author": {
+    "name": "JemaOS",
+    "email": "dev@jematech.fr"
+  },
+  "homepage": "https://github.com/JemaOS/jemaos-usb-quota-gui",
   "main": "electron/main.js",
   "bin": {
     "jemaos-quota": "bin/jemaos-quota.js"
@@ -20,15 +25,39 @@
     "node": ">=18"
   },
   "devDependencies": {
-    "electron": "^31.0.0",
+    "electron": "^31.7.7",
     "electron-builder": "^24.13.3"
   },
   "build": {
     "appId": "fr.jematech.jemaos.quota",
     "productName": "Quota JemaOS",
-    "files": ["bin/**", "src/**", "ui/**", "resources/**", "server.js", "electron/**"],
-    "linux": { "target": ["AppImage", "deb"], "category": "Utility" },
-    "mac": { "target": ["dmg"], "category": "public.app-category.utilities" },
-    "win": { "target": ["nsis"] }
+    "asar": false,
+    "files": [
+      "bin/**",
+      "src/**",
+      "ui/**",
+      "resources/**",
+      "server.js",
+      "electron/**"
+    ],
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Utility",
+      "maintainer": "JemaOS <dev@jematech.fr>"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.utilities"
+    },
+    "win": {
+      "target": [
+        "nsis"
+      ]
+    }
   }
 }

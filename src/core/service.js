@@ -32,22 +32,34 @@ function psquote(value) {
 
 function runElevated(action, paramsFile, outFile) {
   const helperArgs = [action, paramsFile, outFile];
+  // Inside Electron there is no separate `node` binary: the elevated helper
+  // must run through the Electron binary in Node mode.
+  const isElectron = Boolean(process.versions.electron);
   switch (process.platform) {
-    case 'linux':
-      execFileSync('pkexec', [process.execPath, HELPER, ...helperArgs], { encoding: 'utf8' });
+    case 'linux': {
+      const args = isElectron
+        ? ['env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, HELPER, ...helperArgs]
+        : [process.execPath, HELPER, ...helperArgs];
+      execFileSync('pkexec', args, { encoding: 'utf8' });
       break;
+    }
     case 'darwin': {
-      const cmd = [process.execPath, HELPER, ...helperArgs].map(shquote).join(' ');
+      const parts = isElectron
+        ? ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', process.execPath, HELPER, ...helperArgs]
+        : [process.execPath, HELPER, ...helperArgs];
+      const cmd = parts.map(shquote).join(' ');
       const script = `do shell script "${cmd.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}" with administrator privileges`;
       execFileSync('osascript', ['-e', script], { encoding: 'utf8' });
       break;
     }
     case 'win32': {
-      const cmd =
-        `Start-Process -Verb RunAs -Wait -WindowStyle Hidden ` +
-        `-FilePath ${psquote(process.execPath)} ` +
-        `-ArgumentList ${helperArgs.map(psquote).join(',')}`;
-      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', cmd], {
+      const inner = isElectron
+        ? `set ELECTRON_RUN_AS_NODE=1&& "${process.execPath}" ${helperArgs.map(a => `"${a}"`).join(' ')}`
+        : `"${process.execPath}" ${helperArgs.map(a => `"${a}"`).join(' ')}`;
+      const realCmd =
+        `Start-Process -Verb RunAs -Wait -WindowStyle Hidden -FilePath 'cmd.exe' ` +
+        `-ArgumentList '/c', ${psquote(inner)}`;
+      execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', realCmd], {
         encoding: 'utf8',
       });
       break;
