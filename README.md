@@ -63,6 +63,17 @@ Aucune dépendance externe.
 > ⚠️ Une **web app hébergée** (site en ligne) est **impossible** pour cette tâche
 > (pas d’accès aux partitions, pas de root).
 
+### 0) Double-clic (le plus simple — gère les dépendances)
+- **Linux** : `./start.sh` (ou double-clic après « Autoriser l’exécution »).
+  Menu d’applications : `./install-desktop.sh` puis cherche « Quota JemaOS ».
+- **macOS** : double-clic sur **`start.command`**.
+- **Windows** : double-clic sur **`Start Windows.cmd`**.
+
+Le lanceur **vérifie Node ≥ 18 et l’installe si absent**
+(apt / dnf / pacman / zypper / brew / winget), puis **démarre l’app et ouvre le
+navigateur**. L’élévation (pkexec / UAC / osascript) n’est demandée qu’au moment
+d’écrire sur la clé.
+
 ### 1) Lanceur universel (le plus simple) — Linux / macOS / Windows
 ```bash
 node bin/jemaos-quota-app.js      # démarre le serveur + ouvre le navigateur

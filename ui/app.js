@@ -293,6 +293,16 @@ async function main() {
     const { devices } = await api('/api/devices');
     state.devices = devices;
     renderDevices();
+    // Auto-select the most likely key (removable USB with an ESP) so the user
+    // only has to set the limit and click. Falls back to any disk with an ESP.
+    if (!state.selected) {
+      const pick =
+        state.devices.find(d => d.removable && d.partitions.some(p => p.esp)) ||
+        state.devices.find(d => d.partitions.some(p => p.esp));
+      if (pick) {
+        await selectDevice(pick.id);
+      }
+    }
   } catch (error) {
     showBanner(error.message, 'error');
   }
