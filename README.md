@@ -1,163 +1,261 @@
 # Quota JemaOS
 
-Application de bureau pour initialiser et vérifier le quota d’installation
-signé d’une clé USB JemaOS. Fenêtre native Electron, interface sobre, thèmes
-clair/sombre et langues français/anglais.
+Native desktop tool that provisions and verifies the **signed installation quota**
+on a JemaOS USB key. It writes a countersigned file to the key's EFI System
+Partition so the JemaOS installer can enforce how many machines a single key may
+install.
 
-**Aucun serveur local, navigateur ni port réseau.** L’interface communique
-avec le module système par IPC. Les anciens scripts web et installateurs de
-Node ont été retirés. Node est embarqué dans les applications empaquetées ;
-l’utilisateur n’a pas à l’installer.
+- Native window (Electron + IPC). No local HTTP server, no port.
+- Linux, macOS and Windows from one code base.
+- French / English UI, light / dark theme.
+- GUI, plus a headless CLI for support.
 
-## Installation
+---
 
-- **Ubuntu/Debian** : ouvrir le `.deb`, installer, puis lancer **Quota JemaOS**
-  depuis Applications. `quota-jemaos` lance la même fenêtre depuis un terminal.
-- **Autres Linux x64** : exécuter l’AppImage. Si FUSE n’est pas disponible,
-  son option `--appimage-extract-and-run` permet un lancement sans FUSE.
-- **Windows 10/11 x64** : lancer `Quota-JemaOS-<version>-windows-x64-Setup.exe`,
-  puis le raccourci du menu Démarrer. L’interface reste non-administrateur ;
-  UAC est demandé pour les opérations qui le nécessitent.
-  Le fichier `Quota-JemaOS-<version>-windows-x64-Portable.exe` lance la même
-  application sans installation.
-- **macOS** : ouvrir le DMG correspondant au processeur (`x64` pour Intel,
-  `arm64` pour Apple Silicon), puis glisser Quota JemaOS dans Applications.
+## Install
 
-Les installateurs sans certificat ne sont pas signés par un éditeur de confiance
-ni notariés : macOS ou Windows peuvent afficher une alerte. Le build macOS utilise
-une signature technique ad-hoc lorsqu’aucun certificat n’est fourni, notamment
-pour préserver la validité du bundle sur Apple Silicon. Une distribution publique
-nécessite les certificats de signature appropriés ; ne désactive pas les
-protections de l’OS pour contourner une alerte.
+Prebuilt installers are attached to each [release](https://github.com/JemaOS/jemaos-usb-quota-gui/releases).
 
-## Utilisation et sécurité des disques
+| Platform | Artifact |
+| --- | --- |
+| Linux (portable) | `Quota-JemaOS-<version>-linux-<arch>.AppImage` |
+| Linux (Debian/Ubuntu) | `jemaos-usb-quota-gui_<version>_amd64.deb` |
+| Windows 10/11 x64 | `Quota-JemaOS-<version>-windows-x64-Portable.exe` |
+| macOS Intel | `Quota-JemaOS-<version>-macos-x64.dmg` |
+| macOS Apple Silicon | `Quota-JemaOS-<version>-macos-arm64.dmg` |
 
-1. Brancher la clé USB JemaOS déjà flashée.
-2. Sélectionner la clé et choisir la limite, librement ou via les préréglages
-   1, 10, 50, 100, 500, 1 000 et 10 000.
-3. Initialiser et accepter l’autorisation système si elle est demandée.
+Verify downloads against `SHA256SUMS`.
 
-L’initialisation remet le compteur utilisé à zéro. L’application relit ensuite
-le fichier et vérifie sa signature. Elle ne formate ni ne reflashe le disque.
-Les disques internes/système, les partitions EFI ambiguës et les périphériques
-dont l’identité a changé sont refusés.
+- **Linux (`.deb`)**: install the package, then open **Quota JemaOS** from the
+  applications menu (or run `quota-jemaos` in a terminal).
+- **Linux (AppImage)**: mark it executable and run it. If FUSE is unavailable,
+  run it with `--appimage-extract-and-run`.
+- **Windows**: run the portable `.exe`. No installation and no Node.js required.
+- **macOS**: open the DMG for your architecture and drag the app to Applications.
 
-Linux utilise `lsblk`, `mount` et `pkexec`/polkit ; macOS utilise les outils
-`diskutil`, `plutil` et l’autorisation administrateur ; Windows utilise les
-cmdlets Storage PowerShell et UAC. Le montage Windows est vérifié avant toute
-écriture. Si l’OS refuse d’exposer l’ESP de façon sûre, l’opération s’arrête
-avec une erreur : aucun type ni attribut GPT n’est changé pour forcer l’accès.
+> Release builds are **not** signed with a trusted publisher identity. macOS
+> builds are ad-hoc signed (integrity only, not notarized) and Windows builds are
+> unsigned. The OS may show a trust warning on first launch.
 
-## Format compatible avec l’installeur
+---
 
-Fichier : `<ESP>/efi/boot/jemaos-quota.cfg`.
+## Usage
 
-```text
+1. Plug in the JemaOS USB key that has already been flashed.
+2. Select the key. The app auto-selects a removable disk that exposes exactly one
+   EFI System Partition; internal and system disks are never selected.
+3. Set the install limit — type a value or use a preset
+   (1, 10, 50, 100, 500, 1 000, 10 000).
+4. Click **Initialize key**. The app re-reads the file afterwards and verifies its
+   signature. Initialization resets the used counter to zero.
+
+The tool never formats or reflashes the disk. It only writes one small file on the
+existing EFI System Partition.
+
+---
+
+## Quota file format
+
+Location on the ESP:
+
+```
+<ESP>/efi/boot/jemaos-quota.cfg
+```
+
+Contents (GRUB-sourceable):
+
+```
 # JemaOS install quota - signed, do not edit
 set jemaos_quota_limit=100
 set jemaos_quota_used=0
 set jemaos_quota_sig=<signature>
 ```
 
-La signature est le HMAC-SHA256, en hexadécimal minuscule, du message exact
-`limit|used`. La clé est chargée sans les retours à la ligne finaux, comme
-`$(cat KEY)` dans le CLI vendeur. Elle doit correspondre à celle de l’image
-JemaOS. `.gitattributes` préserve les octets de la clé lors d’un checkout Windows.
+Signature rules (must match the JemaOS image and installer exactly):
 
-**Outil vendeur/interne :** la clé HMAC embarquée est un secret partagé que le
-détenteur de l’application peut extraire. Ne publie pas le dépôt ou les paquets
-contenant une clé de production. Une signature locale n’empêche pas de rejouer
-un ancien compteur valide ; une limitation forte nécessite un mécanisme
-supplémentaire, par exemple une activation serveur.
+- Message: the string `"<limit>|<used>"`, e.g. `100|0`.
+- Algorithm: HMAC-SHA256, lowercase hexadecimal output.
+- Key: the bytes of `resources/jemaos-quota.key` **without trailing newlines**,
+  matching `$(cat KEY)` in the vendor shell tooling.
+- The key must be identical to `/usr/share/jemaos/quota.key` inside the image.
 
-## Développement et builds natifs
+Writes are atomic: a temporary file is written, `fsync`-ed, then renamed over the
+target.
 
-Node 22 et npm sont recommandés pour construire les paquets.
+---
+
+## Architecture
+
+```
+electron/        Native window (main + preload bridge)
+ui/              Renderer (HTML/CSS/JS), FR/EN, light/dark
+src/core/        Provider-agnostic logic
+src/platform/    Per-OS device and mount backends
+bin/             Privileged helper and CLI
+scripts/         Build, icon generation, packaging, release checks
+test/            Regression tests (no real USB operations)
+resources/       Vendor HMAC key
+```
+
+Request flow:
+
+```
+renderer (ui/app.js)
+  └─ window.jemaos.invoke(action, payload)      # contextBridge
+       └─ ipcMain handler (electron/main.js)
+            └─ src/core/service.js
+                 ├─ elevated?  → src/core/esp-ops.js
+                 └─ otherwise  → privileged helper via OS elevator
+```
+
+- `electron/preload.js` exposes a fixed, allow-listed `invoke` bridge.
+- `electron/main.js` validates every request (sender frame and URL, channel,
+  payload shape) and disables navigation and window.open.
+- The renderer runs with `contextIsolation: true`, `nodeIntegration: false`, and
+  keeps the Chromium sandbox on macOS and Windows.
+
+### Core modules
+
+| Module | Responsibility |
+| --- | --- |
+| `src/core/crypto.js` | HMAC-SHA256, byte-compatible with `openssl dgst -sha256 -hmac`. |
+| `src/core/quota.js` | Render / parse / verify the counter file; atomic write. |
+| `src/core/esp-ops.js` | Find the ESP, mount it, read/write, unmount; target validation. |
+| `src/core/service.js` | Orchestration, request validation, privilege delegation. |
+| `src/core/elevation.js` | Builds the elevated helper command per OS. |
+| `src/platform/*.js` | Disk enumeration, ESP detection and mounting per OS. |
+
+---
+
+## Privilege model
+
+The GUI runs as the normal user. Only the storage operation is elevated, and only
+when the process is not already privileged:
+
+| OS | Disk tooling | Elevation |
+| --- | --- | --- |
+| Linux | `lsblk`, `mount` | `pkexec` (polkit) |
+| macOS | `diskutil`, `plutil`, `mount` | `osascript` "with administrator privileges" |
+| Windows | PowerShell Storage cmdlets, `mountvol` | UAC (`Start-Process -Verb RunAs`) |
+
+The privileged work is performed by `bin/jemaos-quota-priv.js`, invoked with a
+fixed argv (`action`, parameters file, output file). The helper runs in Node mode
+so it works both from a plain Node process and from a packaged Electron app. Its
+result is exchanged through a temporary file, so the elevated JSON error is still
+returned even when the elevator exits non-zero.
+
+---
+
+## Device safety
+
+The target is verified before and after mounting, and the app fails closed:
+
+- Only **removable** disks are accepted; internal and system disks are rejected.
+- A disk must expose **exactly one** EFI System Partition (GUID
+  `c12a7328-f81f-11d2-ba4b-00a0c93ec93b`); ambiguity aborts the operation.
+- The disk and partition identity is re-checked before the write, and the mount is
+  verified to belong to the expected partition.
+- Linux mounts read-write or remounts, and probes for write access before writing.
+- macOS re-reads `diskutil` state and only unmounts what it mounted.
+- Windows assigns a temporary access path, verifies the mapping matches the
+  selected partition, probes write access, and removes only what it created. It
+  never changes GPT attributes.
+
+---
+
+## CLI
+
+Headless commands, useful for support and scripting:
+
+```bash
+node bin/jemaos-quota.js list
+node bin/jemaos-quota.js show --device <id>
+node bin/jemaos-quota.js init --device <id> --limit 100
+```
+
+Options: `--key <file>` (or `JEMAOS_QUOTA_KEY`).
+
+---
+
+## Build from source
+
+Requires Node.js 22 and npm.
 
 ```bash
 npm ci
 npm test
-npm start
+npm start          # runs the native app from source
 ```
+
+Packaging targets:
 
 ```bash
-npm run dist:linux   # AppImage et deb
-npm run dist:win     # Installateur NSIS exe
-npm run dist:win:portable # Application Windows portable
-npm run dist:mac     # DMG Intel et Apple Silicon (sur macOS)
-npm run dist:mac:linux # DMG Intel et Apple Silicon depuis Linux
+npm run dist:linux        # AppImage + deb
+npm run dist:win          # NSIS installer (needs Wine on Linux, or build on Windows)
+npm run dist:win:portable # portable Windows exe
+npm run dist:mac          # DMG for Intel + Apple Silicon (build on macOS)
+npm run dist:mac:linux    # DMG for Intel + Apple Silicon, built on Linux
 ```
 
-Les icônes PNG/ICO/ICNS sont générées depuis le logo USB avant le packaging.
-Les artefacts sont dans `dist/`. Linux conserve le lanceur compatible avec
-les liens `update-alternatives` et le repli `--no-sandbox` nécessaire sur la
-machine de test ; ce repli ne s’applique pas à Windows/macOS.
+Application icons (PNG / ICO / ICNS) are generated from `ui/logo.svg` before
+each packaging step.
 
-NSIS peut être construit depuis Linux avec Wine, ou sur Windows. Sur macOS, le
-DMG utilise `hdiutil`. Le workflow manuel `.github/workflows/build-native.yml`
-construit Windows/macOS, exécute les tests et vérifie le démarrage natif avant
-de déposer les installateurs en artefacts GitHub Actions. Il doit être exécuté
-dans un dépôt privé configuré ; il n’a pas été lancé automatiquement depuis ce
-poste.
+### Building macOS DMGs on Linux
 
-### DMG depuis Linux (sans Mac, sans hdiutil)
+macOS DMGs can be produced on Linux without `hdiutil`, using verified open-source
+tooling:
 
-`npm run dist:mac:linux` produit de vrais DMG UDIF compressés (bzip2) pour
-Intel et Apple Silicon, à partir d’outils open source vérifiés :
-
-- `mkfs.hfsplus` / `fsck.hfsplus` du paquet Ubuntu `hfsprogs` ;
+- `mkfs.hfsplus` / `fsck.hfsplus` from the Ubuntu `hfsprogs` package;
 - [`mozilla/libdmg-hfsplus`](https://github.com/mozilla/libdmg-hfsplus)
-  (commit épinglé) pour peupler un volume HFS+ et le convertir en UDIF
-  (`dmg build`) ;
-- [`apple-codesign` (rcodesign)](https://github.com/indygreg/apple-platform-rs)
-  pour une signature **ad-hoc** des bundles et de leurs frameworks.
+  (pinned commit) to populate an HFS+ volume and convert it to UDIF (`dmg build`);
+- [`apple-codesign` / rcodesign](https://github.com/indygreg/apple-platform-rs)
+  for ad-hoc signing of the bundle and its frameworks.
 
-`scripts/fetch-dmg-tools.sh` récupère/compile ces outils (SHA-256 vérifiés) ;
-`scripts/build-macos-dmg.sh` signe le `.app`, crée le volume HFS+, ajoute le
-bundle et le lien `Applications`, convertit en DMG et **vérifie l’aller-retour**
-(`dmg extract` + `fsck`). La signature ad-hoc garantit l’intégrité et structure
-un bundle Apple Silicon, mais **n’est ni une identité vérifiée ni une
-notarisation** : ce n’est pas une distribution acceptée par Gatekeeper. Pour une
-diffusion publique, signez avec un certificat Developer ID et notarisez sur
-macOS.
-
-Pour le portable Windows depuis Linux sans Wine, l’édition des métadonnées
-de l’exécutable Electron peut être ignorée :
+`scripts/fetch-dmg-tools.sh` downloads and compiles these tools and verifies
+their SHA-256. `scripts/build-macos-dmg.sh` signs the `.app`, creates the HFS+
+volume, adds the bundle and the `Applications` symlink, converts to a compressed
+UDIF image, and verifies a full round-trip (`dmg extract` + `fsck`). The
+one-command entry point is:
 
 ```bash
-npm run dist:win:portable -- --config.win.signAndEditExecutable=false
+npm run dist:mac:linux
 ```
 
-Ce paquet reste non signé et nécessite un essai sur Windows. Le workflow
-Windows, lui, construit les métadonnées complètes et les deux formes du paquet.
+Ad-hoc signing provides integrity and lets an Apple Silicon bundle run, but it is
+**not** a verified publisher identity and **not** notarized. For public
+distribution, sign with an Apple Developer ID certificate and notarize on macOS.
+
+---
+
+## Testing
 
 ```bash
-node scripts/check-packaged-launch.js
+npm test                              # unit, integration and packaging checks
+node scripts/check-packaged-launch.js # validates a built package (no USB access)
 ```
 
-Ce contrôle charge la vraie interface empaquetée et son pont IPC avec
-`--smoke-test`. Dans ce mode, scan, montage et écriture USB sont désactivés.
-Les tests de commandes macOS/Windows utilisent des fixtures sous Linux ; ils
-ne remplacent pas une validation sur machine avec une vraie clé.
+`--smoke-test` boots the real packaged app, verifies the renderer/`file:` protocol
+and the IPC bridge, and **disables** device scan, mount and write. macOS and
+Windows command paths are covered with fixtures under Linux and still require a
+real machine for end-to-end validation.
 
-Le CLI reste disponible pour le support :
+---
 
-```bash
-node bin/jemaos-quota.js list
-node bin/jemaos-quota.js show --device <identifiant>
-node bin/jemaos-quota.js init --device <identifiant> --limit 100
-```
+## Security notes
 
-## Structure conservée
+- The HMAC key (`resources/jemaos-quota.key`) is a **shared secret**. An app that
+  ships it exposes it to whoever holds the binary: keep this repository and its
+  packages private, or move the key out of the client (keychain, server-side
+  activation), ideally with one key per batch.
+- A locally signed counter does not prevent replaying a previously valid counter.
+  Strong enforcement (Secure Boot with signed image and GRUB, TPM sealing, or
+  server-side activation) is required for tamper resistance against physical
+  access.
+- Release signers: macOS uses ad-hoc signing only. Windows binaries are unsigned
+  unless a certificate is configured in the build.
 
-```text
-electron/        Fenêtre native et pont IPC
-ui/              Interface FR/EN et thèmes
-src/core/        Quota, signature et élévation
-src/platform/    Linux, macOS et Windows
-bin/             Helper privilégié et CLI de support
-resources/       Clé HMAC vendeur
-assets/          Icônes des paquets
-scripts/         Build, lancement de développement et validation
-test/            Régressions et fixtures sans opérations USB réelles
-```
+---
+
+## License
+
+BSD-3-Clause © Jema Technology.
