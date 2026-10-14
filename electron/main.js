@@ -1,34 +1,34 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
-// Electron wrapper: run the local server IN-PROCESS (Electron bundles Node, so
-// there is no separate `node` binary), then open the GUI in a native window.
+// Native Electron app: no local HTTP server, no port — the renderer talks to
+// the main process through IPC (preload bridge). The privileged ESP work still
+// uses the per-operation OS elevator (pkexec / UAC / osascript).
 'use strict';
 
-const { app, BrowserWindow } = require('electron');
-const http = require('node:http');
+const { app, BrowserWindow, ipcMain } = require('electron');
+const fs = require('node:fs');
+const path = require('node:path');
 
-const { start, PORT } = require('../server');
+const service = require('../src/core/service');
+const platform = require('../src/platform');
 
-let server = null;
-const URL = `http://127.0.0.1:${PORT}/`;
-
-function waitForServer(url, tries = 60) {
-  return new Promise((resolve, reject) => {
-    const attempt = (n) => {
-      http
-        .get(url, (res) => {
-          res.resume();
-          resolve();
-        })
-        .on('error', () => {
-          if (n <= 0) {
-            reject(new Error('Server did not start'));
-            return;
-          }
-          setTimeout(() => attempt(n - 1), 100);
-        });
+function registerIpc() {
+  ipcMain.handle('meta', () => {
+    let keyPresent = false;
+    try {
+      keyPresent = fs.existsSync(service.resolveKey());
+    } catch {
+      keyPresent = false;
+    }
+    return {
+      platform: platform.platform,
+      elevated: platform.isElevated(),
+      needsElevation: platform.needsElevation,
+      keyPresent,
     };
-    attempt(tries);
   });
+  ipcMain.handle('devices', () => service.scan());
+  ipcMain.handle('show', (_event, payload) => service.show(payload || {}));
+  ipcMain.handle('init', (_event, payload) => service.init(payload || {}));
 }
 
 function createWindow() {
@@ -40,18 +40,17 @@ function createWindow() {
     title: 'Quota JemaOS',
     backgroundColor: '#0f1012',
     autoHideMenuBar: true,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
-  win.loadURL(URL);
+  win.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
 }
 
-app.whenReady().then(async () => {
-  server = start(PORT);
-  try {
-    await waitForServer(URL);
-  } catch {
-    /* window will show the error */
-  }
+app.whenReady().then(() => {
+  registerIpc();
   createWindow();
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -61,8 +60,5 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (server) {
-    server.close();
-  }
   app.quit();
 });

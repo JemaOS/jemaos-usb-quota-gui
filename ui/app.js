@@ -105,9 +105,30 @@ function applyI18n() {
   el('lang').textContent = t('langToggle');
 }
 
-// ---- api -----------------------------------------------------------------
-async function api(path, options) {
-  const res = await fetch(path, options);
+// ---- api (IPC in the native app, fetch in the web-server mode) -----------
+const bridge = typeof window !== 'undefined' && window.jemaos ? window.jemaos : null;
+
+async function invoke(action, payload) {
+  if (bridge) {
+    return bridge.invoke(action, payload);
+  }
+  const routes = {
+    meta: { method: 'GET', path: '/api/meta' },
+    devices: { method: 'GET', path: '/api/devices' },
+    show: { method: 'POST', path: '/api/show' },
+    init: { method: 'POST', path: '/api/init' },
+  };
+  const route = routes[action];
+  const res = await fetch(
+    route.path,
+    route.method === 'POST'
+      ? {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload || {}),
+        }
+      : { method: 'GET' }
+  );
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
@@ -160,11 +181,7 @@ async function selectDevice(id) {
   updateActionState();
   hideBanner();
   try {
-    state.status = await api('/api/show', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device: id }),
-    });
+    state.status = await invoke('show', { device: id });
     renderStatus(state.status);
   } catch (error) {
     state.status = null;
@@ -223,11 +240,7 @@ async function doInit() {
   btn.disabled = true;
   btn.textContent = t('initBusy');
   try {
-    const result = await api('/api/init', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ device: state.selected, limit }),
-    });
+    const result = await invoke('init', { device: state.selected, limit });
     showBanner(t('initOk', { limit: result.limit }), 'ok');
     await selectDevice(state.selected);
   } catch (error) {
@@ -278,7 +291,7 @@ async function main() {
   wireEvents();
 
   try {
-    state.meta = await api('/api/meta');
+    state.meta = await invoke('meta');
     if (state.meta.needsElevation && !state.meta.elevated && state.meta.platform === 'win32') {
       showBanner(t('bannerAdmin'));
     }
@@ -290,8 +303,8 @@ async function main() {
   }
 
   try {
-    const { devices } = await api('/api/devices');
-    state.devices = devices;
+    const res = await invoke('devices');
+    state.devices = Array.isArray(res) ? res : res.devices;
     renderDevices();
     // Auto-select the most likely key (removable USB with an ESP) so the user
     // only has to set the limit and click. Falls back to any disk with an ESP.
