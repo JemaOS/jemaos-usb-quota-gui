@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="fr">
+<html lang="fr" data-theme="light">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
@@ -10,30 +10,33 @@
   <main class="app">
     <header class="topbar">
       <div class="brand">
-        <div class="logo" aria-hidden="true">Q</div>
+        <span class="mark" aria-hidden="true">Q</span>
         <div class="brand-text">
-          <h1>Quota JemaOS</h1>
-          <p class="sub">Provisionner le quota d’installation signé sur une clé USB</p>
+          <h1 data-i18n="title">Quota JemaOS</h1>
+          <p class="sub" data-i18n="subtitle">Provisionner le quota d’installation signé sur une clé USB</p>
         </div>
       </div>
-      <span id="platform-pill" class="pill">…</span>
+      <div class="controls">
+        <button id="lang" class="ctl" type="button" data-i18n="langToggle">EN</button>
+        <button id="theme" class="ctl icon" type="button" aria-label="Theme">☾</button>
+      </div>
     </header>
 
     <div id="banner" class="banner hidden" role="alert"></div>
 
     <section class="card">
-      <div class="card-head"><span class="step">1</span><h2>Choisir la clé USB</h2></div>
+      <div class="card-head"><span class="step">1</span><h2 data-i18n="step1">Choisir la clé USB</h2></div>
       <div id="device-list" class="device-list">
-        <div class="empty">Recherche des périphériques…</div>
+        <div class="empty" data-i18n="scanning">Recherche des périphériques…</div>
       </div>
     </section>
 
     <section class="card">
-      <div class="card-head"><span class="step">2</span><h2>Limite d’installations</h2></div>
+      <div class="card-head"><span class="step">2</span><h2 data-i18n="step2">Limite d’installations</h2></div>
       <div class="limit-row">
-        <button id="limit-dec" class="round" type="button" aria-label="Diminuer">–</button>
+        <button id="limit-dec" class="round" type="button" aria-label="−">−</button>
         <input id="limit" type="number" min="0" step="1" value="100" inputmode="numeric" />
-        <button id="limit-inc" class="round" type="button" aria-label="Augmenter">+</button>
+        <button id="limit-inc" class="round" type="button" aria-label="+">+</button>
       </div>
       <div class="presets">
         <button class="chip" data-limit="1" type="button">1</button>
@@ -41,16 +44,16 @@
         <button class="chip" data-limit="50" type="button">50</button>
         <button class="chip" data-limit="100" type="button">100</button>
       </div>
-      <p class="hint">Nombre maximum d’installations autorisées pour cette clé.</p>
+      <p class="hint" data-i18n="hintLimit">Nombre maximum d’installations autorisées pour cette clé.</p>
     </section>
 
     <section class="card actions">
-      <button id="init-btn" class="primary" type="button" disabled>Initialiser la clé</button>
-      <p class="hint center" id="action-hint">Sélectionne une clé pour continuer.</p>
+      <button id="init-btn" class="primary" type="button" disabled data-i18n="initBtn">Initialiser la clé</button>
+      <p class="hint center" id="action-hint" data-i18n="hintSelect">Sélectionne une clé pour continuer.</p>
     </section>
 
     <section id="status-card" class="card hidden">
-      <div class="card-head"><span class="step ok" id="status-badge">i</span><h2 id="status-title">État de la clé</h2></div>
+      <div class="card-head"><span class="step ok" id="status-badge">i</span><h2 id="status-title" data-i18n="statusTitle">État de la clé</h2></div>
       <dl id="status-grid" class="grid"></dl>
     </section>
   </main>

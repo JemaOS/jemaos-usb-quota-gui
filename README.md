@@ -35,14 +35,21 @@ Vérifié octet pour octet contre `openssl dgst -sha256 -hmac` (voir `test/`).
 
 ## Interface graphique
 
-3 étapes, épuré (façon ColorOS 17) :
+**Minimaliste et sobre** (monochrome, un seul accent, sans dégradés), en 3 étapes :
 
 1. **Choisir la clé USB** (disques remarquables + détection ESP par GUID
    `c12a7328-f81f-11d2-ba4b-00a0c93ec93b`).
 2. **Limite d’installations** (stepper + préréglages).
 3. **Initialiser la clé** → écriture + relecture + vérification de signature.
 
-Fonctionne en **auto clair/sombre**, sans dépendance externe.
+Options d’affichage :
+
+- **Thème clair / sombre** commutable (bouton en haut à droite, mémorisé ;
+  sinon suit le système).
+- **Langue FR / EN** commutable (bouton `FR`/`EN`, mémorisé ; sinon détectée
+  depuis le navigateur).
+
+Aucune dépendance externe.
 
 ---
 
