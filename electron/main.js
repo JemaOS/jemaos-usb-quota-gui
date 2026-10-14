@@ -11,6 +11,14 @@ const path = require('node:path');
 const service = require('../src/core/service');
 const platform = require('../src/platform');
 
+// Linux compatibility: some systems lack a properly set-up setuid chrome-sandbox
+// or disable unprivileged user namespaces, which makes Electron refuse to start.
+// This is a local, trusted UI, so we disable the Chromium sandbox and GPU
+// acceleration to launch reliably everywhere.
+app.commandLine.appendSwitch('no-sandbox');
+app.commandLine.appendSwitch('disable-gpu');
+app.disableHardwareAcceleration();
+
 function registerIpc() {
   ipcMain.handle('meta', () => {
     let keyPresent = false;
