@@ -5,7 +5,7 @@ on a JemaOS USB key. It writes a countersigned file to the key's EFI System
 Partition so the JemaOS installer can enforce how many machines a single key may
 install.
 
-- Native window (Electron + IPC). No local HTTP server, no port.
+- Native desktop window (Electron + IPC).
 - Linux, macOS and Windows from one code base.
 - French / English UI, light / dark theme.
 - GUI, plus a headless CLI for support.

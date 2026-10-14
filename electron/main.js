@@ -1,7 +1,7 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
-// Native Electron app: no local HTTP server, no port — the renderer talks to
-// the main process through IPC (preload bridge). The privileged ESP work still
-// uses the per-operation OS elevator (pkexec / UAC / osascript).
+// Native Electron app: the renderer talks to the main process through IPC
+// (preload bridge). The privileged ESP work still uses the per-operation OS
+// elevator (pkexec / UAC / osascript).
 'use strict';
 
 const { app, BrowserWindow, ipcMain } = require('electron');
