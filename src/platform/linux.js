@@ -1,6 +1,7 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
 // Linux platform backend: enumerate block devices, locate the EFI System
-// Partition (GUID c12a7328-…), mount it read-write and unmount it.
+// Partition (GUID c12a7328-…), mount it read-write (with fallbacks) and verify
+// it is actually writable before use.
 'use strict';
 
 const { execFileSync } = require('node:child_process');
@@ -11,18 +12,34 @@ const path = require('node:path');
 const EFI_GUID = 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b';
 
 function run(cmd, args) {
-  return execFileSync(cmd, args, { encoding: 'utf8' });
+  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 20000 });
+}
+function tryRun(cmd, args) {
+  try {
+    return { ok: true, out: run(cmd, args) };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
 function isElevated() {
   return typeof process.getuid === 'function' && process.getuid() === 0;
 }
 
-/** @returns {Array} removable-friendly list of disks with their partitions */
+function isWritable(dir) {
+  try {
+    const probe = path.join(dir, `.jemaos-quota.${process.pid}.tmp`);
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function listDevices() {
   const out = run('lsblk', [
-    '-J', '-b',
-    '-o', 'NAME,PATH,TYPE,SIZE,MODEL,RM,TRAN,PARTTYPE,MOUNTPOINT',
+    '-J', '-b', '-o', 'NAME,PATH,TYPE,SIZE,MODEL,RM,TRAN,PARTTYPE,MOUNTPOINT',
   ]);
   const data = JSON.parse(out);
   const disks = (data.blockdevices || []).filter(d => d.type === 'disk');
@@ -47,24 +64,32 @@ function listDevices() {
 }
 
 function espPartition(disk) {
-  if (!disk) {
-    return null;
-  }
-  return disk.partitions.find(p => p.esp) || null;
+  return disk ? disk.partitions.find(p => p.esp) || null : null;
 }
 
-/** Mount the ESP read-write. Returns { mountDir, owned }. */
 function mountEsp(partition) {
+  // 1) Already mounted: try to make it writable in place.
   if (partition.mountpoint) {
-    try {
-      run('mount', ['-o', 'remount,rw', partition.mountpoint]);
-    } catch {
-      /* remount may be refused if not needed; continue */
+    tryRun('mount', ['-o', 'remount,rw', partition.mountpoint]);
+    if (isWritable(partition.mountpoint)) {
+      return { mountDir: partition.mountpoint, owned: false };
     }
-    return { mountDir: partition.mountpoint, owned: false };
   }
+  // 2) Mount somewhere private.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-esp-'));
-  run('mount', ['-o', 'rw', partition.path, dir]);
+  const first = tryRun('mount', ['-o', 'rw', partition.path, dir]);
+  if (!first.ok) {
+    const second = tryRun('mount', [partition.path, dir]);
+    if (!second.ok) {
+      throw new Error(`Mount failed for ${partition.path}: ${(second.error || first.error).message}`);
+    }
+    tryRun('mount', ['-o', 'remount,rw', dir]);
+  }
+  if (!isWritable(dir)) {
+    tryRun('umount', [dir]);
+    fs.rmdirSync(dir);
+    throw new Error(`ESP ${partition.path} mounted but not writable`);
+  }
   return { mountDir: dir, owned: true };
 }
 
@@ -72,11 +97,7 @@ function unmountEsp(handle) {
   if (!handle || !handle.owned) {
     return;
   }
-  try {
-    run('umount', [handle.mountDir]);
-  } catch {
-    /* best effort */
-  }
+  tryRun('umount', [handle.mountDir]);
   try {
     fs.rmdirSync(handle.mountDir);
   } catch {

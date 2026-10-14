@@ -1,17 +1,27 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
-// macOS platform backend (diskutil). NOTE: implemented from the documented
-// diskutil/plutil behaviour; validate on a real Mac before shipping.
+// macOS platform backend (diskutil), with fallbacks and write verification.
+// Validate on a real Mac before shipping.
 'use strict';
 
 const { execFileSync, spawnSync } = require('node:child_process');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 function run(cmd, args) {
-  return execFileSync(cmd, args, { encoding: 'utf8' });
+  return execFileSync(cmd, args, { encoding: 'utf8', timeout: 20000 });
+}
+function tryRun(cmd, args) {
+  try {
+    return { ok: true, out: run(cmd, args) };
+  } catch (error) {
+    return { ok: false, error };
+  }
 }
 
-function plistToJson(plistText) {
+function plistToJson(text) {
   const res = spawnSync('plutil', ['-convert', 'json', '-o', '-', '-'], {
-    input: plistText,
+    input: text,
     encoding: 'utf8',
   });
   if (res.status !== 0) {
@@ -24,9 +34,24 @@ function isElevated() {
   return typeof process.getuid === 'function' && process.getuid() === 0;
 }
 
-function diskInfo(id) {
+function isWritable(dir) {
   try {
-    return plistToJson(run('diskutil', ['info', '-plist', id]));
+    const probe = path.join(dir, `.jemaos-quota.${process.pid}.tmp`);
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function diskInfo(id) {
+  const res = tryRun('diskutil', ['info', '-plist', id]);
+  if (!res.ok) {
+    return {};
+  }
+  try {
+    return plistToJson(res.out);
   } catch {
     return {};
   }
@@ -59,27 +84,41 @@ function listDevices() {
 }
 
 function espPartition(disk) {
-  if (!disk) {
-    return null;
-  }
-  return disk.partitions.find(p => p.esp) || null;
+  return disk ? disk.partitions.find(p => p.esp) || null : null;
 }
 
 function mountEsp(partition) {
-  run('diskutil', ['mount', partition.path]);
-  const info = diskInfo(partition.path.replace('/dev/', ''));
-  const mountDir = info.MountPoint || '/Volumes/EFI';
+  const shortId = partition.path.replace('/dev/', '');
+  const before = diskInfo(shortId);
+  if (before.MountPoint) {
+    return { mountDir: before.MountPoint, owned: false };
+  }
+
+  tryRun('diskutil', ['mount', partition.path]);
+  let info = diskInfo(shortId);
+  let mountDir = info.MountPoint;
+
+  if (!mountDir) {
+    // Fallback: mount the FAT partition manually.
+    mountDir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-esp-'));
+    const res = tryRun('mount', ['-t', 'msdos', partition.path, mountDir]);
+    if (!res.ok) {
+      throw new Error(`Could not mount ${partition.path}: ${res.error.message}`);
+    }
+  }
+  if (!isWritable(mountDir)) {
+    throw new Error(`ESP mounted but not writable: ${mountDir}`);
+  }
   return { mountDir, owned: true, handle: { device: partition.path, mountDir } };
 }
 
 function unmountEsp(handle) {
-  if (!handle || !handle.handle) {
+  if (!handle || !handle.owned || !handle.handle) {
     return;
   }
-  try {
-    run('diskutil', ['unmount', handle.handle.mountDir]);
-  } catch {
-    /* best effort */
+  const res = tryRun('diskutil', ['unmount', handle.handle.mountDir]);
+  if (!res.ok) {
+    tryRun('umount', [handle.handle.mountDir]);
   }
 }
 
