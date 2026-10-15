@@ -1,6 +1,6 @@
 {
   "name": "jemaos-usb-quota-gui",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "private": true,
   "description": "Cross-platform tool to provision the signed JemaOS USB installation quota (Linux / macOS / Windows)",
   "license": "BSD-3-Clause",
@@ -43,7 +43,7 @@
     "productName": "Quota JemaOS",
     "executableName": "quota-jemaos",
     "afterPack": "scripts/afterPack.js",
-    "asar": false,
+    "asar": true,
     "electronVersion": "31.7.7",
     "files": [
       "bin/jemaos-quota-priv.js",
@@ -97,11 +97,14 @@
       "deleteAppDataOnUninstall": false
     },
     "portable": {
-      "artifactName": "Quota-JemaOS-${version}-windows-${arch}-Portable.exe",
-      "requestExecutionLevel": "admin"
+      "artifactName": "Quota-JemaOS-${version}-windows-${arch}-Portable.exe"
     },
     "appImage": {
       "artifactName": "Quota-JemaOS-${version}-linux-${arch}.AppImage"
-    }
+    },
+    "asarUnpack": [
+      "bin/**",
+      "resources/**"
+    ]
   }
 }
