@@ -19,7 +19,15 @@ const ops = require('./esp-ops');
 const { commandFor } = require('./elevation');
 const execute = promisify(execFile);
 
-const HELPER = path.join(__dirname, '..', '..', 'bin', 'jemaos-quota-priv.js');
+// Files listed in electron-builder's `asarUnpack` live next to the archive as
+// real files under `app.asar.unpacked/`. The privileged helper must be a real
+// path so it can be executed by pkexec/osascript.
+function unpackedPath(p) {
+  const marker = `app.asar${path.sep}`;
+  return p.includes(marker) ? p.replace(marker, `app.asar.unpacked${path.sep}`) : p;
+}
+
+const HELPER = unpackedPath(path.join(__dirname, '..', '..', 'bin', 'jemaos-quota-priv.js'));
 
 async function scan() {
   try {

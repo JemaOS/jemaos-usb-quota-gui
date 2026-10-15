@@ -1,6 +1,6 @@
 {
   "name": "jemaos-usb-quota-gui",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "Cross-platform tool to provision the signed JemaOS USB installation quota (Linux / macOS / Windows)",
   "license": "BSD-3-Clause",
@@ -98,7 +98,7 @@
     },
     "portable": {
       "artifactName": "Quota-JemaOS-${version}-windows-${arch}-Portable.exe",
-      "requestExecutionLevel": "user"
+      "requestExecutionLevel": "admin"
     },
     "appImage": {
       "artifactName": "Quota-JemaOS-${version}-linux-${arch}.AppImage"

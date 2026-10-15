@@ -11,7 +11,16 @@ const platform = require('../platform');
 const quota = require('./quota');
 const { loadKey } = require('./crypto');
 
-const DEFAULT_KEY = path.join(__dirname, '..', '..', 'resources', 'jemaos-quota.key');
+// The key is shipped in `asarUnpack`, so it exists as a real file under
+// `app.asar.unpacked/`; resolve that path when running from a packaged app.
+function unpackedPath(p) {
+  const marker = `app.asar${path.sep}`;
+  return p.includes(marker) ? p.replace(marker, `app.asar.unpacked${path.sep}`) : p;
+}
+
+const DEFAULT_KEY = unpackedPath(
+  path.join(__dirname, '..', '..', 'resources', 'jemaos-quota.key')
+);
 
 function resolveKey(keyFile) {
   return path.resolve(keyFile || process.env.JEMAOS_QUOTA_KEY || DEFAULT_KEY);
