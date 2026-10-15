@@ -248,7 +248,7 @@ test('macOS uses an identified EFI partition, not a mount point guessed from its
 
 test('macOS rolls back a new mount if write verification fails', () => {
   const { backend, calls } = macFixture({ probeError: true });
-  assert.throws(() => backend.mountEsp(backend.listDevices()[0].partitions[0]), /read-only/);
+  assert.throws(() => backend.mountEsp(backend.listDevices()[0].partitions[0], { writable: true }), /writable|read-only/);
   assert.equal(calls.removed, 1);
 });
 

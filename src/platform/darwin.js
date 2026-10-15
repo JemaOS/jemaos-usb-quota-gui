@@ -49,17 +49,12 @@ function isWritable(dir) {
 }
 
 // macOS mounts the EFI System Partition read-only by default. Remount it
-// read-write in place (`mount -u -w`, which needs root) before giving up.
-// Returns whether the mount point ends up writable.
+// read-write before giving up. The canonical form is by device
+// (`mount -u -w /dev/diskXsY`), then by mount point. Returns { ok, detail }.
 function makeWritable(mountDir) {
   if (isWritable(mountDir)) {
-    return true;
+    return { ok: true, detail: '' };
   }
-  tryRun('/sbin/mount', ['-u', '-w', mountDir]);
-  if (isWritable(mountDir)) {
-    return true;
-  }
-  // Some builds expose the device only by identifier; remount it explicitly.
   let device = null;
   try {
     const info = diskInfo(mountDir);
@@ -67,10 +62,22 @@ function makeWritable(mountDir) {
   } catch {
     device = null;
   }
+  const attempts = [];
   if (device) {
-    tryRun('/sbin/mount', ['-u', '-w', device]);
+    attempts.push(['-u', '-w', device]);
   }
-  return isWritable(mountDir);
+  attempts.push(['-u', '-w', mountDir]);
+  let detail = '';
+  for (const args of attempts) {
+    const res = tryRun('/sbin/mount', args);
+    if (isWritable(mountDir)) {
+      return { ok: true, detail: '' };
+    }
+    if (!res.ok) {
+      detail = String(res.error.message || res.error).trim();
+    }
+  }
+  return { ok: false, detail };
 }
 
 function diskInfo(id) {
@@ -148,8 +155,11 @@ function mountEsp(partition, options = {}) {
   if (before.MountPoint) {
     assertMount(partition, before.MountPoint);
     // Reading does not need write access; only force rw before a write.
-    if (writable && !makeWritable(before.MountPoint)) {
-      throw new Error('The EFI partition is read-only.');
+    if (writable) {
+      const rw = makeWritable(before.MountPoint);
+      if (!rw.ok) {
+        throw new Error(`Cannot remount the EFI partition (${partition.path} at ${before.MountPoint}) read-write${rw.detail ? `: ${rw.detail}` : ''}. Run the app as administrator.`);
+      }
     }
     return { mountDir: before.MountPoint, owned: false };
   }
@@ -170,8 +180,11 @@ function mountEsp(partition, options = {}) {
       handle.mountDir = dir;
     }
     assertMount(partition, handle.mountDir);
-    if (writable && !makeWritable(handle.mountDir)) {
-      throw new Error('The EFI partition is read-only.');
+    if (writable) {
+      const rw = makeWritable(handle.mountDir);
+      if (!rw.ok) {
+        throw new Error(`Cannot make the EFI partition (${partition.path}) writable${rw.detail ? `: ${rw.detail}` : ''}. Run the app as administrator.`);
+      }
     }
     return handle;
   } catch (error) {
