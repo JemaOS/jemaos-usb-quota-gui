@@ -7,6 +7,7 @@ const I18N = {
     subtitle: 'Provisionner le quota d’installation signé sur une clé USB',
     langToggle: 'EN',
     step1: 'Choisir la clé USB',
+    refresh: 'Actualiser',
     step2: 'Limite d’installations',
     scanning: 'Recherche des périphériques…',
     none: 'Aucun disque détecté.',
@@ -42,6 +43,7 @@ const I18N = {
     subtitle: 'Provision the signed installation quota on a USB key',
     langToggle: 'FR',
     step1: 'Choose the USB key',
+    refresh: 'Refresh',
     step2: 'Install limit',
     scanning: 'Scanning devices…',
     none: 'No disk detected.',
@@ -133,6 +135,39 @@ function hideBanner() {
 }
 
 // ---- devices -------------------------------------------------------------
+async function loadDevices() {
+  const res = await invoke('devices');
+  state.devices = (Array.isArray(res) ? res : res.devices).filter(d => d.removable && !d.systemDisk);
+  // Drop a selection whose key is no longer connected (unplugged / replaced).
+  if (state.selected && !state.devices.some(d => d.id === state.selected)) {
+    state.selected = null;
+    state.status = null;
+    el('status-card').classList.add('hidden');
+  }
+  renderDevices();
+  // Never fall back to an internal/system disk when no USB key is connected.
+  if (!state.selected) {
+    const pick = state.devices.find(d => d.partitions.filter(p => p.esp).length === 1);
+    if (pick) {
+      await selectDevice(pick.id);
+    }
+  }
+  updateActionState();
+}
+
+async function refreshDevices() {
+  const btn = el('refresh');
+  btn.disabled = true;
+  hideBanner();
+  try {
+    await loadDevices();
+  } catch (error) {
+    showBanner(error.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 function renderDevices() {
   const list = el('device-list');
   list.innerHTML = '';
@@ -274,6 +309,7 @@ function wireEvents() {
   });
   el('init-btn').addEventListener('click', doInit);
   el('limit').addEventListener('input', updateActionState);
+  el('refresh').addEventListener('click', refreshDevices);
 
   el('theme').addEventListener('click', () => {
     const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
@@ -309,17 +345,7 @@ async function main() {
   }
 
   try {
-    const res = await invoke('devices');
-    state.devices = (Array.isArray(res) ? res : res.devices)
-      .filter(d => d.removable && !d.systemDisk);
-    renderDevices();
-    // Never fall back to an internal/system disk when no USB key is connected.
-    if (!state.selected) {
-      const pick = state.devices.find(d => d.partitions.filter(p => p.esp).length === 1);
-      if (pick) {
-        await selectDevice(pick.id);
-      }
-    }
+    await loadDevices();
   } catch (error) {
     showBanner(error.message, 'error');
   }

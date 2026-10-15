@@ -1,6 +1,6 @@
 {
   "name": "jemaos-usb-quota-gui",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "description": "Cross-platform tool to provision the signed JemaOS USB installation quota (Linux / macOS / Windows)",
   "license": "BSD-3-Clause",
@@ -26,7 +26,8 @@
     "dist:win:portable": "npm run dist -- --win portable --x64 --publish never",
     "dist:mac": "npm run dist -- --mac dmg --x64 --arm64 --publish never",
     "dist:mac:dir": "npm run dist -- --mac dir --x64 --arm64 --publish never",
-    "dist:mac:linux": "bash scripts/dist-macos-on-linux.sh"
+    "dist:mac:linux": "bash scripts/dist-macos-on-linux.sh",
+    "dist:win:zip": "bash scripts/dist-win-zip.sh"
   },
   "engines": {
     "node": ">=18"
