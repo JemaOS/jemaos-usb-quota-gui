@@ -1,0 +1,76 @@
+# Copyright (c) 2026 The JemaOS Authors. All rights reserved.
+#
+# Build the Windows installers and sign them for free through SignPath.io
+# Foundation (https://signpath.org) — available for public/open-source projects.
+#
+# This workflow is DISABLED by default (workflow_dispatch only). To use it:
+#   1. Make the repository public and OSI-licensed (see LICENSE).
+#   2. Apply to SignPath Foundation and obtain the project/policy slugs.
+#   3. Add repository secrets:
+#        SIGNPATH_API_TOKEN
+#        SIGNPATH_ORGANIZATION_ID
+#      and set the SLUGS below (or as variables).
+#   4. Provide the HMAC key so the build can embed it, as a secret:
+#        JEMAOS_QUOTA_KEY_B64   (base64 of the key file contents)
+#
+# Unsigned builds remain available from `npm run dist:win:zip`.
+name: Sign Windows (SignPath)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+env:
+  SIGNPATH_PROJECT_SLUG: quota-jemaos
+  SIGNPATH_SIGNING_POLICY_SLUG: release-signing
+  SIGNPATH_ARTIFACT_CONFIGURATION_SLUG: windows-zip
+
+jobs:
+  build-and-sign:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+
+      # Inject the (secret) HMAC key so the packaged app can sign the quota.
+      - name: Provide quota key
+        shell: pwsh
+        run: |
+          if (-not "${{ secrets.JEMAOS_QUOTA_KEY_B64 }}") { throw "JEMAOS_QUOTA_KEY_B64 secret is required" }
+          $bytes = [Convert]::FromBase64String("${{ secrets.JEMAOS_QUOTA_KEY_B64 }}")
+          [IO.File]::WriteAllBytes("resources/jemaos-quota.key", $bytes)
+          if (-not (Test-Path "resources/jemaos-quota.key")) { throw "key write failed" }
+
+      - run: npm run icons
+      - run: npm run dist:win:zip
+
+      - name: Upload unsigned artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-unsigned
+          path: dist/*.zip
+
+      - name: Submit signing request to SignPath
+        uses: SignPath/github-action-submit-signing-request@v1
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ secrets.SIGNPATH_ORGANIZATION_ID }}
+          project-slug: ${{ env.SIGNPATH_PROJECT_SLUG }}
+          signing-policy-slug: ${{ env.SIGNPATH_SIGNING_POLICY_SLUG }}
+          artifact-configuration-slug: ${{ env.SIGNPATH_ARTIFACT_CONFIGURATION_SLUG }}
+          github-artifact-id: 'windows-unsigned'
+          wait-for-completion: true
+          output-artifact-directory: 'dist-signed'
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-signed
+          path: dist-signed/*.zip

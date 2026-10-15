@@ -1,4 +1,8 @@
 node_modules/
 dist/
+dist-signed/
 *.log
 .DS_Store
+
+# Shared secret: never commit the real quota signing key.
+resources/jemaos-quota.key

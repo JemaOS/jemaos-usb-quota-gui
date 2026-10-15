@@ -229,6 +229,22 @@ Until a certificate is configured, end users can run a downloaded build by
 unblocking it first: right-click → Properties → check **Unblock**, or
 `Unblock-File -Path <file>` in PowerShell.
 
+### Free Windows signing (SignPath Foundation)
+
+For public/open-source projects, [SignPath.io Foundation](https://signpath.org)
+signs Windows artifacts for free. This project is prepared for it:
+
+- it ships an OSI license (`LICENSE`, BSD-3-Clause) and must be a **public**
+  repository;
+- the HMAC key is **not** in the repository — it is injected at build time
+  (`JEMAOS_QUOTA_KEY_B64` secret) by `.github/workflows/sign-windows.yml`;
+- once approved by SignPath Foundation, set the `SIGNPATH_API_TOKEN` and
+  `SIGNPATH_ORGANIZATION_ID` repository secrets and run the
+  **Sign Windows (SignPath)** workflow.
+
+Until then, unsigned builds remain available and require unblocking the
+downloaded file (see above).
+
 ### Building macOS DMGs on Linux
 
 macOS DMGs can be produced on Linux without `hdiutil`, using verified open-source
