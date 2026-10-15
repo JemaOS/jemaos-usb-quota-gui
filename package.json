@@ -1,6 +1,6 @@
 {
   "name": "jemaos-usb-quota-gui",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "description": "Cross-platform tool to provision the signed JemaOS USB installation quota (Linux / macOS / Windows)",
   "license": "BSD-3-Clause",
@@ -104,7 +104,8 @@
     },
     "asarUnpack": [
       "bin/**",
-      "resources/**"
+      "resources/**",
+      "src/**"
     ]
   }
 }
