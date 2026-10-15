@@ -53,17 +53,19 @@ function windowsFixture(config = {}) {
       }
       const script = Buffer.from(args.at(-1), 'base64').toString('utf16le');
       calls.commands.push(script);
-      if (script.includes('Get-Disk |')) return JSON.stringify(disk);
-      if (script.includes('Get-Partition |')) return JSON.stringify({ ...part, AccessPaths: accessPaths, GptType: config.wrongGuid ? GUID : EFI });
+      if (script.includes('disks = ')) {
+        return JSON.stringify({ disks: [disk], parts: [{ ...part, AccessPaths: accessPaths, GptType: config.wrongGuid ? GUID : EFI }] });
+      }
+      if (script.includes('disk = ')) {
+        return JSON.stringify({ disk, part: { ...part, DriveLetter: mapped ? 'Y' : '\u0000' } });
+      }
       if (script.includes('GetLogicalDrives')) return JSON.stringify(['C:\\', 'Z:\\']);
-      if (script.includes('Get-Disk -Number')) return JSON.stringify(disk);
       if (script.includes('Get-Partition -DriveLetter')) {
         if (config.wrongVolume || race) return JSON.stringify({ ...part, DiskNumber: 9 });
         return mapped ? JSON.stringify({ ...part, DriveLetter: 'Y' }) : '';
       }
       if (script.includes('.AccessPaths')) return JSON.stringify(accessPaths);
       if (script.includes('Get-Volume -Partition')) return config.noVolume ? '' : JSON.stringify(volume);
-      if (script.includes('Get-Partition -DiskNumber')) return JSON.stringify({ ...part, DriveLetter: mapped ? 'Y' : '\u0000' });
       if (script.includes('Set-Partition') || script.includes('Add-PartitionAccessPath')) {
         if (config.storageDenied || config.wrongVolume) throw new Error('assignment refused');
         mapped = true;

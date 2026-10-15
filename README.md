@@ -30,7 +30,9 @@ Verify downloads against `SHA256SUMS`.
   applications menu (or run `quota-jemaos` in a terminal).
 - **Linux (AppImage)**: mark it executable and run it. If FUSE is unavailable,
   run it with `--appimage-extract-and-run`.
-- **Windows**: run the portable `.exe`. No installation and no Node.js required.
+- **Windows**: run the portable `.exe` (or the `.zip`). No installation and no
+  Node.js required. The application runs as administrator and requests elevation
+  at launch (single UAC prompt).
 - **macOS**: open the DMG for your architecture and drag the app to Applications.
 
 > Release builds are **not** signed with a trusted publisher identity. macOS
@@ -136,7 +138,7 @@ when the process is not already privileged:
 | --- | --- | --- |
 | Linux | `lsblk`, `mount` | `pkexec` (polkit) |
 | macOS | `diskutil`, `plutil`, `mount` | `osascript` "with administrator privileges" |
-| Windows | PowerShell Storage cmdlets, `mountvol` | UAC (`Start-Process -Verb RunAs`) |
+| Windows | PowerShell Storage cmdlets, `mountvol` | runs as administrator (UAC at launch) |
 
 The privileged work is performed by `bin/jemaos-quota-priv.js`, invoked with a
 fixed argv (`action`, parameters file, output file). The helper runs in Node mode

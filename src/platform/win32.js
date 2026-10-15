@@ -73,7 +73,7 @@ function ps(script) {
 function psJson(expression) {
   const wrapped =
     `$r = @(${expression}); ` +
-    "if ($r.Count -eq 0) { Write-Output 'null' } else { Write-Output ($r | ConvertTo-Json -Compress) }";
+    "if ($r.Count -eq 0) { Write-Output 'null' } else { Write-Output ($r | ConvertTo-Json -Compress -Depth 6) }";
   const out = ps(wrapped).replace(/^\uFEFF/, '');
   const line = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop();
   if (!line || line === 'null') {
@@ -121,14 +121,15 @@ function isWritable(dir) {
 }
 
 function listDevices() {
-  const disks = asArray(
-    psJson('Get-Disk | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem')
-  );
-  const parts = asArray(
+  // One PowerShell round-trip for all disks and partitions (PowerShell startup
+  // dominates the cost, so we combine the two queries).
+  const data =
     psJson(
-      'Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem,AccessPaths'
-    )
-  );
+      '@{ disks = @(Get-Disk | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem); ' +
+        'parts = @(Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem,AccessPaths) }'
+    ) || {};
+  const disks = asArray(data.disks);
+  const parts = asArray(data.parts);
 
   return disks.map(d => {
     const partitions = parts.filter(p => Number(p.DiskNumber) === Number(d.Number)).map(p => {
@@ -204,8 +205,14 @@ function currentPartition(partition) {
   if (!Number.isSafeInteger(d) || d < 0 || !Number.isSafeInteger(p) || p < 1) {
     throw new Error('Invalid disk or partition identifier');
   }
-  const disk = psJson(`Get-Disk -Number ${d} | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem`);
-  const actual = psJson(`Get-Partition -DiskNumber ${d} -PartitionNumber ${p} | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,IsBoot,IsSystem`);
+  // Single PowerShell round-trip for the disk and the partition.
+  const data =
+    psJson(
+      `@{ disk = (Get-Disk -Number ${d} | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem); ` +
+        `part = (Get-Partition -DiskNumber ${d} -PartitionNumber ${p} | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,IsBoot,IsSystem) }`
+    ) || {};
+  const disk = data.disk;
+  const actual = data.part;
   if (!disk || !actual || normalizeBus(disk.BusType) !== 'USB' || disk.IsBoot || disk.IsSystem
       || actual.IsBoot || actual.IsSystem || diskIdentity(disk) !== partition.diskIdentity
       || normalizeGuid(actual.GptType) !== EFI_GUID || Number(actual.Offset) !== partition.offset
