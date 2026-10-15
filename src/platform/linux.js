@@ -43,33 +43,61 @@ function isSystemDisk(block) {
     || (block.children || []).some(isSystemDisk);
 }
 
+// lsblk reads the partition type GUID (PARTTYPE) from the udev database. Inside a
+// container/sandbox without a populated udev DB (e.g. the ChromeOS Linux
+// container, or a Docker sandbox) PARTTYPE comes back empty, so the EFI System
+// Partition cannot be found by GUID. `blkid -p` probes the partition table
+// directly from the disk instead (this is the documented fallback, and it needs
+// read access to the device - i.e. root).
+function probePartitionType(devicePath) {
+  try {
+    const out = execFileSync('blkid', ['-p', '-o', 'export', devicePath], {
+      encoding: 'utf8', timeout: 10000,
+    });
+    const match = out.match(/^PART_ENTRY_TYPE=(.+)$/m);
+    return match ? match[1].trim().toLowerCase() : '';
+  } catch {
+    return '';
+  }
+}
+
 function listDevices() {
   const out = run('lsblk', [
     '-J', '-b', '-o', 'NAME,PATH,TYPE,SIZE,MODEL,SERIAL,WWN,RM,TRAN,PARTTYPE,PARTUUID,MOUNTPOINT',
   ]);
   const data = JSON.parse(out);
   const disks = (data.blockdevices || []).filter(d => d.type === 'disk');
-  return disks.map(d => ({
-    id: d.path,
-    path: d.path,
-    name: d.name,
-    size: Number(d.size) || 0,
-    model: String(d.model || '').trim(),
-    removable: d.tran === 'usb' || d.rm === true || d.rm === '1' || d.rm === 1,
-    transport: String(d.tran || '').toUpperCase(),
-    identity: JSON.stringify([d.path, d.wwn || d.serial || '', Number(d.size),
-      (d.children || []).filter(p => p.parttype === EFI_GUID).map(p => p.partuuid || p.path)]),
-    systemDisk: isSystemDisk(d),
-    partitions: (d.children || []).map(c => ({
-      id: c.path,
-      path: c.path,
-      name: c.name,
-      size: Number(c.size) || 0,
-      partType: String(c.parttype || '').toLowerCase(),
-      mountpoint: c.mountpoint || null,
-      esp: String(c.parttype || '').toLowerCase() === EFI_GUID,
-    })),
-  }));
+  return disks.map(d => {
+    const partitions = (d.children || []).map(c => {
+      let partType = String(c.parttype || '').toLowerCase();
+      if (!partType) {
+        // udev-less environment: probe the partition table directly.
+        partType = probePartitionType(c.path);
+      }
+      return {
+        id: c.path,
+        path: c.path,
+        name: c.name,
+        size: Number(c.size) || 0,
+        partType,
+        mountpoint: c.mountpoint || null,
+        esp: partType === EFI_GUID,
+      };
+    });
+    return {
+      id: d.path,
+      path: d.path,
+      name: d.name,
+      size: Number(d.size) || 0,
+      model: String(d.model || '').trim(),
+      removable: d.tran === 'usb' || d.rm === true || d.rm === '1' || d.rm === 1,
+      transport: String(d.tran || '').toUpperCase(),
+      identity: JSON.stringify([d.path, d.wwn || d.serial || '', Number(d.size),
+        partitions.filter(p => p.esp).map(p => p.path)]),
+      systemDisk: isSystemDisk(d),
+      partitions,
+    };
+  });
 }
 
 function espPartition(disk) {

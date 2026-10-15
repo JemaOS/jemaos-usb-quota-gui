@@ -38,6 +38,10 @@ function mainFixture(platform, smoke = false) {
         window = this;
       }
       loadFile(filename) { called.file = filename; }
+      setContentSize(w, h) { called.contentSize = [w, h]; }
+      setMinimumSize(w, h) { called.minimumSize = [w, h]; }
+      once(event, fn) { if (event === 'ready-to-show') fn(); }
+      on() {}
     } };
   // On Windows the packaged app runs the elevated instance; mirror that here so
   // the elevation check does not spawn PowerShell during tests.
@@ -63,6 +67,23 @@ for (const platform of ['darwin', 'win32']) {
     assert.equal(fixture.called.openWindow().action, 'deny');
   });
 }
+
+test('window does not set min size constraints in the constructor (Linux growth bug)', () => {
+  // On Linux, Electron mis-applies min/max size constraints and the window keeps
+  // growing by itself. The constraints must not be set at construction time.
+  const fixture = mainFixture('linux');
+  assert.equal('minWidth' in fixture.window.options, false);
+  assert.equal('minHeight' in fixture.window.options, false);
+  assert.equal(fixture.window.options.useContentSize, true);
+  assert.deepEqual(fixture.called.contentSize, [840, 920]);
+});
+
+test('a minimum window size is applied only on non-Linux platforms', () => {
+  const linux = mainFixture('linux');
+  const mac = mainFixture('darwin');
+  assert.equal(linux.called.minimumSize, undefined, 'Linux must not register a minimum size');
+  assert.deepEqual(mac.called.minimumSize, [560, 640]);
+});
 
 test('foreign windows and child frames cannot call the privileged IPC', () => {
   const fixture = mainFixture('linux');

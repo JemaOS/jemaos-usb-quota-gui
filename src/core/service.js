@@ -32,7 +32,20 @@ const HELPER = unpackedPath(path.join(__dirname, '..', '..', 'bin', 'jemaos-quot
 async function scan() {
   try {
     // Explicit scan (app start / refresh button) always reads fresh state.
-    return platform.listDevices(true);
+    const devices = platform.listDevices(true);
+    // On Linux, partition types come from the udev database; inside a container
+    // (e.g. ChromeOS Linux container) it may be empty, so the ESP cannot be
+    // found by its type GUID. If a removable disk exposes partitions but none of
+    // their types could be resolved, retry the whole scan elevated, where
+    // `blkid -p` can read the partition table directly.
+    if (process.platform === 'linux' && !platform.isElevated()) {
+      const needsElevation = devices.some(d => d.removable && !d.systemDisk
+        && d.partitions.length > 0 && d.partitions.every(p => !p.partType));
+      if (needsElevation) {
+        return runPrivileged('scan', {});
+      }
+    }
+    return devices;
   } catch (error) {
     if (process.platform === 'win32' && error.code === 'ADMIN_REQUIRED') {
       return runPrivileged('scan', {});

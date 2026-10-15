@@ -23,6 +23,67 @@ const windows = require('../src/platform/win32');
 const EFI = 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b';
 const GUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 
+// ---------------------------------------------------------------------------
+// Linux: ESP detection must survive a container without the udev database,
+// where lsblk returns an empty PARTTYPE. The documented fallback is blkid -p.
+// ---------------------------------------------------------------------------
+function linuxFixture(config = {}) {
+  const calls = { blkid: [] };
+  const lsblkJson = JSON.stringify({
+    blockdevices: [{
+      name: 'sda', path: '/dev/sda', type: 'disk', size: 32000000000, model: 'USB Key',
+      rm: 1, tran: 'usb',
+      children: [
+        { name: 'sda1', path: '/dev/sda1', type: 'part', size: 8000000000, parttype: '0fc63daf-8483-4772-8e79-3d69d8477de4', mountpoint: null },
+        { name: 'sda12', path: '/dev/sda12', type: 'part', size: 33554432,
+          // Empty when udev is unavailable; blkid -p is the fallback.
+          parttype: config.lsblkParttype !== undefined ? config.lsblkParttype : '' },
+      ],
+    }],
+  });
+  const execFileSync = (file, args) => {
+    if (file === 'lsblk') return lsblkJson;
+    if (file === 'blkid') {
+      calls.blkid.push(args);
+      if (config.blkidDenied) throw new Error('Operation not permitted');
+      if (String(args[args.length - 1]).endsWith('sda12')) {
+        return `DEVNAME=/dev/sda12\nPART_ENTRY_SCHEME=gpt\nPART_ENTRY_TYPE=${EFI.toUpperCase()}\n`;
+      }
+      return 'DEVNAME=/dev/sda1\nPART_ENTRY_SCHEME=gpt\nPART_ENTRY_TYPE=0fc63daf-8483-4772-8e79-3d69d8477de4\n';
+    }
+    throw new Error(`unexpected command: ${file}`);
+  };
+  const backend = load('src/platform/linux.js', { 'node:child_process': { execFileSync } });
+  return { backend, calls };
+}
+
+test('Linux finds the ESP via blkid when lsblk reports no partition type (no udev)', () => {
+  const { backend, calls } = linuxFixture();
+  const disk = backend.listDevices()[0];
+  const esp = disk.partitions.find(p => p.esp);
+  assert.ok(esp, 'ESP detected through the blkid fallback');
+  assert.equal(esp.path, '/dev/sda12');
+  assert.deepEqual(esp.partType, EFI);
+  assert.ok(calls.blkid.length >= 1, 'blkid -p was used');
+});
+
+test('Linux keeps using the lsblk type when udev is available (no blkid call)', () => {
+  const { backend, calls } = linuxFixture({ lsblkParttype: EFI });
+  const esp = backend.listDevices()[0].partitions.find(p => p.esp);
+  assert.equal(esp.path, '/dev/sda12');
+  assert.equal(calls.blkid.length, 0, 'no need to probe when the type is known');
+});
+
+test('Linux does not crash when blkid is not permitted (scan then elevates)', () => {
+  const { backend } = linuxFixture({ blkidDenied: true });
+  const disk = backend.listDevices()[0];
+  const esp = disk.partitions.find(p => p.path === '/dev/sda12');
+  assert.equal(esp.esp, false);
+  assert.equal(esp.partType, '', 'type stays unknown when blkid is denied');
+  // Types unknown on a removable disk -> service.scan() retries elevated.
+  assert.ok(disk.partitions.some(p => !p.partType));
+});
+
 test('Windows normalizes the USB bus, Char16 drive letters and EFI GUID', () => {
   assert.equal(windows.normalizeBus(7), 'USB');
   assert.equal(windows.normalizeBus('USB'), 'USB');

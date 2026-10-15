@@ -110,7 +110,10 @@ function serviceFixture(config = {}) {
     'node:child_process': { execFile: execute },
     '../platform': {
       isElevated: () => Boolean(config.elevated),
-      listDevices: () => { if (config.scanError) throw config.scanError; return []; },
+      listDevices: () => {
+        if (config.scanError) throw config.scanError;
+        return config.devices || [];
+      },
     },
     './esp-ops': {
       resolveKey: () => '/fixture/key',
@@ -158,6 +161,28 @@ test('Windows device scan elevates only after a specific permission denial', asy
   const { service, calls } = serviceFixture({ platform: 'win32', scanError: denied, result: '[]' });
   assert.equal((await service.scan()).length, 0);
   assert.equal(calls.executed, 1);
+});
+
+test('Linux scan re-runs elevated when partition types cannot be resolved (no udev)', async () => {
+  // A removable USB disk whose partitions have no PARTTYPE (lsblk without udev).
+  const devices = [{
+    id: '/dev/sda', path: '/dev/sda', removable: true, systemDisk: false,
+    partitions: [{ path: '/dev/sda1', partType: '' }, { path: '/dev/sda12', partType: '' }],
+  }];
+  const { service, calls } = serviceFixture({ platform: 'linux', devices, result: '[]' });
+  await service.scan();
+  assert.equal(calls.executed, 1, 'scan retried through the elevated helper');
+});
+
+test('Linux scan stays unprivileged when partition types are known', async () => {
+  const devices = [{
+    id: '/dev/sda', path: '/dev/sda', removable: true, systemDisk: false,
+    partitions: [{ path: '/dev/sda12', partType: 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b' }],
+  }];
+  const { service, calls } = serviceFixture({ platform: 'linux', devices });
+  const result = await service.scan();
+  assert.equal(calls.executed, 0, 'no elevation when types are available');
+  assert.equal(result.length, 1);
 });
 
 test('invalid helper parameters never reach the privileged operations', () => {

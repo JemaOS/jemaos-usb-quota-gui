@@ -128,19 +128,33 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 840,
     height: 920,
-    minWidth: 560,
-    minHeight: 640,
+    // Treat width/height as the web content size. On Linux (notably the
+    // ChromeOS container / sommelier) mixing frame insets with content size
+    // makes the window drift.
+    useContentSize: true,
     title: 'Quota JemaOS',
     backgroundColor: '#0f1012',
     autoHideMenuBar: true,
     icon: path.join(__dirname, '..', 'assets', 'icon.png'),
     show: !smokeTest,
+    // NOTE: do NOT set minWidth/minHeight here. On Linux, Electron applies those
+    // size constraints to the window incorrectly and the window keeps growing by
+    // itself (fixed only in Electron 41). A minimum size is applied after the
+    // window is shown instead (setMinimumSize, below), which avoids the drift.
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: process.platform !== 'linux',
     },
+  });
+  // Apply the initial size once after creation so the content size wins, then
+  // register a sensible minimum without triggering the growth bug.
+  win.setContentSize(840, 920);
+  win.once('ready-to-show', () => {
+    if (process.platform !== 'linux') {
+      win.setMinimumSize(560, 640);
+    }
   });
   mainWindow = win;
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
