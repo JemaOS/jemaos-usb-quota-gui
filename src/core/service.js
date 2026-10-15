@@ -16,7 +16,7 @@ const path = require('node:path');
 
 const platform = require('../platform');
 const ops = require('./esp-ops');
-const { commandFor } = require('./elevation');
+const { elevationCandidates } = require('./elevation');
 const execute = promisify(execFile);
 
 // Files listed in electron-builder's `asarUnpack` live next to the archive as
@@ -68,7 +68,7 @@ async function runPrivileged(action, params) {
   try {
     const request = action === 'scan' ? params : { ...params, keyFile: ops.resolveKey(params.keyFile) };
     fs.writeFileSync(paramsFile, JSON.stringify(request), { flag: 'wx', mode: 0o600 });
-    const command = commandFor({
+    const candidates = elevationCandidates({
       platform: process.platform,
       executable: process.execPath,
       helper: HELPER,
@@ -79,17 +79,33 @@ async function runPrivileged(action, params) {
       systemRoot: process.env.SystemRoot,
     });
     let launchError;
-    try {
-      await execute(command.file, command.args, { encoding: 'utf8', windowsHide: true });
-    } catch (error) {
-      launchError = error;
+    let launchDetail = '';
+    for (const command of candidates) {
+      if (fs.existsSync(outFile)) {
+        break;
+      }
+      launchError = undefined;
+      try {
+        await execute(command.file, command.args, { encoding: 'utf8', windowsHide: true });
+      } catch (error) {
+        launchError = error;
+        const detail = String(error.stderr || error.message || '').trim();
+        if (detail) {
+          launchDetail = detail.split('\n').slice(0, 3).join(' ');
+        }
+        // A missing elevation tool (ENOENT) is not fatal: try the next candidate.
+        if (error.code !== 'ENOENT' && fs.existsSync(outFile)) {
+          break;
+        }
+      }
     }
     if (!fs.existsSync(outFile)) {
       if (launchError && launchError.code === 'ENOENT') {
         throw new Error('Authorization tool unavailable. Run the application as administrator.');
       }
+      const suffix = launchDetail ? ` (${launchDetail})` : '';
       throw new Error(launchError
-        ? 'Authorization cancelled or privileged helper could not start.'
+        ? `Authorization cancelled or privileged helper could not start.${suffix}`
         : 'Privileged helper returned no result.');
     }
     let result;

@@ -8,7 +8,7 @@ const os = require('node:os');
 const vm = require('node:vm');
 const { createRequire } = require('node:module');
 const { spawnSync } = require('node:child_process');
-const { commandFor } = require('../src/core/elevation');
+const { commandFor, elevationCandidates } = require('../src/core/elevation');
 const root = path.join(__dirname, '..');
 
 function load(relative, dependencies, globals = {}) {
@@ -86,6 +86,24 @@ test('unrecognized privileged actions are rejected before constructing a command
   assert.throws(() => commandFor({ ...options, platform: 'win32', action: 'resolveKey' }), /Unsupported/);
 });
 
+test('Linux elevation tries pkexec first, then falls back to passwordless sudo', () => {
+  const candidates = elevationCandidates({ ...options, platform: 'linux', electron: true });
+  assert.equal(candidates.length, 2);
+  assert.equal(candidates[0].file, '/usr/bin/pkexec');
+  assert.equal(candidates[1].file, '/usr/bin/sudo');
+  // sudo must be non-interactive (-n) so a GUI launch never hangs on a prompt.
+  assert.equal(candidates[1].args[0], '-n');
+  assert.deepEqual(candidates[1].args.slice(1), [
+    '/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1',
+    options.executable, options.helper, options.action, options.paramsFile, options.outFile,
+  ]);
+});
+
+test('macOS and Windows have a single elevation command (no sudo fallback)', () => {
+  assert.equal(elevationCandidates({ ...options, platform: 'darwin', electron: true }).length, 1);
+  assert.equal(elevationCandidates({ ...options, platform: 'win32', electron: true, systemRoot: 'C:\\Windows' }).length, 1);
+});
+
 function serviceFixture(config = {}) {
   const files = new Map();
   const calls = { executed: 0, cleaned: false, operations: 0 };
@@ -100,8 +118,30 @@ function serviceFixture(config = {}) {
     readFileSync: file => files.get(file),
     rmSync: () => { calls.cleaned = true; },
   };
-  const execute = (_file, _args, _options, callback) => {
+  const execute = (file, _args, _options, callback) => {
     calls.executed++;
+    calls.files = calls.files || [];
+    calls.files.push(file);
+    // Optional per-file behaviour (e.g. pkexec fails, sudo succeeds).
+    if (config.onFile && Object.hasOwn(config.onFile, file)) {
+      const outcome = config.onFile[file];
+      if (outcome === 'result') {
+        files.set(path.join('/fixture/request', 'out.json'), config.result ?? '{"valid":true,"limit":100,"used":0}');
+        callback(null, '', '');
+        return;
+      }
+      if (outcome === 'enoent') {
+        const err = new Error('spawn pkexec ENOENT'); err.code = 'ENOENT';
+        callback(err, '', '');
+        return;
+      }
+      // treat anything else as a non-zero exit with stderr
+      const err = new Error(String(outcome));
+      err.code = 1;
+      err.stderr = String(outcome);
+      callback(err, '', '');
+      return;
+    }
     if (config.result !== undefined) files.set(path.join('/fixture/request', 'out.json'), config.result);
     callback(config.launchError || null, '', '');
   };
@@ -154,6 +194,27 @@ test('already elevated process does not invoke a second elevation tool', async (
   assert.equal((await service.init({ device: '/dev/example', limit: 100 })).valid, true);
   assert.equal(calls.executed, 0);
   assert.equal(calls.operations, 1);
+});
+
+test('Linux falls back to sudo when pkexec fails (no polkit agent in a container)', async () => {
+  const { service, calls } = serviceFixture({
+    platform: 'linux',
+    onFile: { '/usr/bin/pkexec': 'No authentication agent found', '/usr/bin/sudo': 'result' },
+  });
+  const result = await service.init({ device: '/dev/sda', limit: 50 });
+  assert.equal(result.valid, true);
+  assert.deepEqual(calls.files, ['/usr/bin/pkexec', '/usr/bin/sudo'], 'pkexec tried first, then sudo');
+});
+
+test('Linux reports the real elevation error when every candidate fails', async () => {
+  const { service } = serviceFixture({
+    platform: 'linux',
+    onFile: { '/usr/bin/pkexec': 'No authentication agent found', '/usr/bin/sudo': 'sudo: a password is required' },
+  });
+  await assert.rejects(
+    service.init({ device: '/dev/sda', limit: 50 }),
+    /sudo: a password is required|No authentication agent/
+  );
 });
 
 test('Windows device scan elevates only after a specific permission denial', async () => {

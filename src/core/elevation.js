@@ -49,4 +49,23 @@ function commandFor({ platform, executable, helper, action, paramsFile, outFile,
   throw new Error(`Unsupported platform: ${platform}`);
 }
 
-module.exports = { commandFor };
+// Ordered list of elevation commands to try. On Linux we try pkexec first and
+// fall back to `sudo -n` (non-interactive): the ChromeOS Linux container
+// (Crostini) has no polkit authentication agent, so pkexec always fails there,
+// while its user has passwordless sudo.
+function elevationCandidates(options) {
+  const primary = commandFor(options);
+  if (options.platform !== 'linux') {
+    return [primary];
+  }
+  const args = [options.helper, options.action, options.paramsFile, options.outFile];
+  const inner = options.electron
+    ? ['/usr/bin/env', 'ELECTRON_RUN_AS_NODE=1', options.executable, ...args]
+    : [options.executable, ...args];
+  return [
+    primary,
+    { file: '/usr/bin/sudo', args: ['-n', ...inner] },
+  ];
+}
+
+module.exports = { commandFor, elevationCandidates };
