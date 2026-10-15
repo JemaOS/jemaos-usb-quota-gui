@@ -195,12 +195,37 @@ Packaging targets:
 npm run dist:linux        # AppImage + deb
 npm run dist:win          # NSIS installer (needs Wine on Linux, or build on Windows)
 npm run dist:win:portable # portable Windows exe
+npm run dist:win:zip      # full application folder as .zip (all DLLs, no self-extraction)
 npm run dist:mac          # DMG for Intel + Apple Silicon (build on macOS)
 npm run dist:mac:linux    # DMG for Intel + Apple Silicon, built on Linux
 ```
 
 Application icons (PNG / ICO / ICNS) are generated from `ui/logo.svg` before
 each packaging step.
+
+### Windows code signing
+
+Windows SmartScreen warns about unsigned binaries from an unknown publisher
+("Windows protected your PC"). This is expected for any unsigned build and
+cannot be removed without a code signing certificate.
+
+To sign the Windows artifacts, provide a certificate to electron-builder:
+
+```bash
+# OV certificate exported as .pfx (works on Linux via osslsigncode, or on Windows):
+export CSC_LINK="file:///absolute/path/to/certificate.pfx"
+export CSC_KEY_PASSWORD="<password>"
+npm run dist:win          # or dist:win:portable / dist:win:zip
+```
+
+- **OV** certificates build SmartScreen reputation over time.
+- **EV** certificates gain immediate reputation but usually live on a hardware
+  token, which must be used on Windows (or a cloud signing service such as
+  Azure Trusted Signing).
+
+Until a certificate is configured, end users can run a downloaded build by
+unblocking it first: right-click → Properties → check **Unblock**, or
+`Unblock-File -Path <file>` in PowerShell.
 
 ### Building macOS DMGs on Linux
 
