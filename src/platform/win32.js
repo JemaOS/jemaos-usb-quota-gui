@@ -37,26 +37,49 @@ function diskIdentity(disk) {
   return JSON.stringify([Number(disk.Number), String(disk.UniqueId || disk.SerialNumber || disk.FriendlyName || ''), Number(disk.Size)]);
 }
 
+function cleanPowerShellError(text) {
+  return String(text || '')
+    .replace(/#< CLIXML[\s\S]*$/i, '')
+    .replace(/<Objs[\s\S]*$/i, '')
+    .trim() || 'PowerShell command failed.';
+}
+
 function ps(script) {
-  const body = "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; " + script;
+  const body =
+    "$ProgressPreference = 'SilentlyContinue'; " +
+    "$ErrorActionPreference = 'Stop'; " +
+    '[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding; ' +
+    script;
   try {
     return execFileSync(POWERSHELL,
       ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(body, 'utf16le').toString('base64')],
       { encoding: 'utf8', timeout: 30000, windowsHide: true });
   } catch (error) {
     const detail = String(error.stderr || error.message || error);
-    if (/0x80070005|UnauthorizedAccess|PermissionDenied|access (?:is )?denied|acc[eè]s (?:est )?refus[eé]/i.test(detail)) {
+    if (/0x80070005|UnauthorizedAccess|PermissionDenied|access is denied|acc[eè]s (?:est )?refus[eé]|Access to the path/i.test(detail)) {
       const denied = new Error('Administrator authorization required to inspect storage devices.');
       denied.code = 'ADMIN_REQUIRED';
       throw denied;
     }
+    // Drop PowerShell's CLIXML/progress noise so callers get a readable message.
+    error.message = cleanPowerShellError(detail);
     throw error;
   }
 }
 
-function psJson(script) {
-  const out = ps(script).replace(/^\uFEFF/, '').trim();
-  return out ? JSON.parse(out) : null;
+// Runs an expression and always yields a JSON line ("null" when empty). This
+// avoids the PowerShell 5.1 pitfall where an empty pipeline fed to
+// ConvertTo-Json errors out under $ErrorActionPreference = 'Stop'.
+function psJson(expression) {
+  const wrapped =
+    `$r = @(${expression}); ` +
+    "if ($r.Count -eq 0) { Write-Output 'null' } else { Write-Output ($r | ConvertTo-Json -Compress) }";
+  const out = ps(wrapped).replace(/^\uFEFF/, '');
+  const line = out.split(/\r?\n/).map(s => s.trim()).filter(Boolean).pop();
+  if (!line || line === 'null') {
+    return null;
+  }
+  return JSON.parse(line);
 }
 
 function asArray(value) {
@@ -99,11 +122,11 @@ function isWritable(dir) {
 
 function listDevices() {
   const disks = asArray(
-    psJson('Get-Disk | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem | ConvertTo-Json -Compress')
+    psJson('Get-Disk | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem')
   );
   const parts = asArray(
     psJson(
-      'Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem | ConvertTo-Json -Compress'
+      'Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem'
     )
   );
 
@@ -142,7 +165,7 @@ function espPartition(disk) {
 }
 
 function usedLetters() {
-  return asArray(psJson('[System.IO.Directory]::GetLogicalDrives() | ConvertTo-Json -Compress'))
+  return asArray(psJson('[System.IO.Directory]::GetLogicalDrives()'))
     .map(p => normalizeDriveLetter(String(p).slice(0, 1)))
     .filter(Boolean);
 }
@@ -161,11 +184,11 @@ function freeDriveLetter() {
 function volumePath(diskNumber, partitionNumber) {
   const paths = asArray(
     psJson(
-      `(Get-Partition -DiskNumber ${diskNumber} -PartitionNumber ${partitionNumber}).AccessPaths | ConvertTo-Json -Compress`
+      `(Get-Partition -DiskNumber ${diskNumber} -PartitionNumber ${partitionNumber} -ErrorAction Ignore).AccessPaths`
     )
   );
   try {
-    const volume = psJson(`Get-Volume -Partition (Get-Partition -DiskNumber ${diskNumber} -PartitionNumber ${partitionNumber}) | Select-Object -ExpandProperty UniqueId | ConvertTo-Json -Compress`);
+    const volume = psJson(`Get-Volume -Partition (Get-Partition -DiskNumber ${diskNumber} -PartitionNumber ${partitionNumber} -ErrorAction Ignore) -ErrorAction Ignore | Select-Object -ExpandProperty UniqueId`);
     paths.push(...asArray(volume));
   } catch { /* Some hidden ESPs have no Storage volume; fail safely below. */ }
   return paths.flat().find(p => typeof p === 'string' && p.startsWith('\\\\?\\Volume{')
@@ -178,8 +201,8 @@ function currentPartition(partition) {
   if (!Number.isSafeInteger(d) || d < 0 || !Number.isSafeInteger(p) || p < 1) {
     throw new Error('Invalid disk or partition identifier');
   }
-  const disk = psJson(`Get-Disk -Number ${d} | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem | ConvertTo-Json -Compress`);
-  const actual = psJson(`Get-Partition -DiskNumber ${d} -PartitionNumber ${p} | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,IsBoot,IsSystem | ConvertTo-Json -Compress`);
+  const disk = psJson(`Get-Disk -Number ${d} | Select-Object Number,FriendlyName,Size,BusType,UniqueId,SerialNumber,IsBoot,IsSystem`);
+  const actual = psJson(`Get-Partition -DiskNumber ${d} -PartitionNumber ${p} | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,IsBoot,IsSystem`);
   if (!disk || !actual || normalizeBus(disk.BusType) !== 'USB' || disk.IsBoot || disk.IsSystem
       || actual.IsBoot || actual.IsSystem || diskIdentity(disk) !== partition.diskIdentity
       || normalizeGuid(actual.GptType) !== EFI_GUID || Number(actual.Offset) !== partition.offset
@@ -190,7 +213,7 @@ function currentPartition(partition) {
 }
 
 function mappingMatches(letter, partition) {
-  const mapped = psJson(`Get-Partition -DriveLetter ${letter} -ErrorAction SilentlyContinue | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType | ConvertTo-Json -Compress`);
+  const mapped = psJson(`Get-Partition -DriveLetter ${letter} -ErrorAction Ignore | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType`);
   return mapped && !Array.isArray(mapped) && Number(mapped.DiskNumber) === partition.diskNumber
     && Number(mapped.PartitionNumber) === partition.partitionNumber && Number(mapped.Offset) === partition.offset
     && Number(mapped.Size) === partition.size && normalizeGuid(mapped.GptType) === EFI_GUID
