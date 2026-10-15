@@ -48,6 +48,31 @@ function isWritable(dir) {
   }
 }
 
+// macOS mounts the EFI System Partition read-only by default. Remount it
+// read-write in place (`mount -u -w`, which needs root) before giving up.
+// Returns whether the mount point ends up writable.
+function makeWritable(mountDir) {
+  if (isWritable(mountDir)) {
+    return true;
+  }
+  tryRun('/sbin/mount', ['-u', '-w', mountDir]);
+  if (isWritable(mountDir)) {
+    return true;
+  }
+  // Some builds expose the device only by identifier; remount it explicitly.
+  let device = null;
+  try {
+    const info = diskInfo(mountDir);
+    device = info.DeviceIdentifier ? `/dev/${info.DeviceIdentifier}` : null;
+  } catch {
+    device = null;
+  }
+  if (device) {
+    tryRun('/sbin/mount', ['-u', '-w', device]);
+  }
+  return isWritable(mountDir);
+}
+
 function diskInfo(id) {
   return plistToJson(run('/usr/sbin/diskutil', ['info', '-plist', id]));
 }
@@ -115,13 +140,17 @@ function assertMount(partition, mountDir) {
   assertPartition(partition, diskInfo(mountDir));
 }
 
-function mountEsp(partition) {
+function mountEsp(partition, options = {}) {
+  const writable = options.writable !== false;
   const shortId = partition.path.replace('/dev/', '');
   const before = diskInfo(shortId);
   assertPartition(partition, before);
   if (before.MountPoint) {
     assertMount(partition, before.MountPoint);
-    if (!isWritable(before.MountPoint)) throw new Error('The EFI partition is read-only.');
+    // Reading does not need write access; only force rw before a write.
+    if (writable && !makeWritable(before.MountPoint)) {
+      throw new Error('The EFI partition is read-only.');
+    }
     return { mountDir: before.MountPoint, owned: false };
   }
 
@@ -141,7 +170,9 @@ function mountEsp(partition) {
       handle.mountDir = dir;
     }
     assertMount(partition, handle.mountDir);
-    if (!isWritable(handle.mountDir)) throw new Error('The EFI partition is read-only.');
+    if (writable && !makeWritable(handle.mountDir)) {
+      throw new Error('The EFI partition is read-only.');
+    }
     return handle;
   } catch (error) {
     try { unmountEsp(handle); }

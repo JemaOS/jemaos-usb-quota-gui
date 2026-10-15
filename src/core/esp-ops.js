@@ -92,7 +92,7 @@ function show({ device, identity, keyFile } = {}) {
       limit: verified ? verified.limit : parsed.limit ?? null,
       used: verified ? verified.used : parsed.used ?? null,
     };
-  }, { verify: false });
+  }, { verify: false, writable: false });
 }
 
 function init({ device, identity, limit, keyFile } = {}) {
@@ -109,7 +109,7 @@ function init({ device, identity, limit, keyFile } = {}) {
       throw new Error('Post-write verification failed');
     }
     return { esp: esp.id, limit: verified.limit, used: verified.used, valid: true };
-  }, { verify: true });
+  }, { verify: true, writable: true });
 }
 
 module.exports = { scan, show, init, resolveKey, DEFAULT_KEY };

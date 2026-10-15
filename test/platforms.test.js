@@ -179,15 +179,19 @@ test('Windows never removes a borrowed pre-existing mount', () => {
 });
 
 function macFixture(config = {}) {
-  const calls = { commands: [], probes: 0, removed: 0, manualMount: 0, directoriesRemoved: 0 };
+  const calls = { commands: [], probes: 0, removed: 0, manualMount: 0, directoriesRemoved: 0, remounts: 0 };
   let mounted = Boolean(config.borrowed);
   let mountDir = '/Volumes/USB EFI';
+  let readOnly = Boolean(config.readOnly);
   const partition = { DeviceIdentifier: 'disk2s1', ParentWholeDisk: 'disk2', Content: 'EFI',
     TotalSize: 32e6, VolumeUUID: GUID };
   const childProcess = {
     execFileSync: (file, args) => {
       calls.commands.push({ file, args });
-      if (file === '/sbin/mount') { mounted = true; mountDir = args.at(-1); calls.manualMount++; return ''; }
+      if (file === '/sbin/mount') {
+        if (args[0] === '-u') { readOnly = false; calls.remounts++; return ''; }
+        mounted = true; mountDir = args.at(-1); calls.manualMount++; return '';
+      }
       if (args[0] === 'list') return JSON.stringify({ AllDisksAndPartitions: [{ DeviceIdentifier: 'disk2', Size: 32e9,
         Partitions: [{ DeviceIdentifier: 'disk2s1', Content: 'EFI', Size: 32e6, VolumeUUID: GUID }] }] });
       if (args[0] === 'info') {
@@ -196,7 +200,7 @@ function macFixture(config = {}) {
         if (target === 'disk2') return JSON.stringify({ Internal: false, VirtualOrPhysical: 'Physical', MediaName: 'USB fixture', BusProtocol: 'USB' });
         return JSON.stringify({ ...partition, ParentWholeDisk: config.wrongParent ? 'disk0' : 'disk2', MountPoint: mounted ? mountDir : undefined });
       }
-      if (args[0] === 'mount') { if (config.mountError) throw new Error('mount fixture refused'); mounted = true; return ''; }
+      if (args[0] === 'mount') { if (config.mountError) throw new Error('mount fixture refused'); mounted = true; readOnly = Boolean(config.readOnly); return ''; }
       if (args[0] === 'unmount') { mounted = false; calls.removed++; return ''; }
       throw new Error('Unexpected macOS fixture command');
     },
@@ -207,11 +211,31 @@ function macFixture(config = {}) {
   const backend = load('src/platform/darwin.js', {
     'node:child_process': childProcess,
     'node:fs': { mkdtempSync: () => '/fixture/ESP folder',
-      writeFileSync: (_file, _value, options) => { assert.equal(options.flag, 'wx'); calls.probes++; if (config.probeError) throw new Error('probe refused'); },
+      writeFileSync: (_file, _value, options) => {
+        assert.equal(options.flag, 'wx');
+        if (readOnly) { const e = new Error('read only fixture'); e.code = 'EROFS'; throw e; }
+        calls.probes++;
+        if (config.probeError) throw new Error('probe refused');
+      },
       unlinkSync() {}, rmdirSync: () => { calls.directoriesRemoved++; } },
   });
   return { backend, calls };
 }
+
+test('macOS remounts a read-only EFI partition read-write before a write', () => {
+  const { backend, calls } = macFixture({ borrowed: true, readOnly: true });
+  const handle = backend.mountEsp(backend.listDevices()[0].partitions[0], { writable: true });
+  assert.equal(handle.mountDir, '/Volumes/USB EFI');
+  assert.ok(calls.remounts >= 1, 'remounted read-write');
+  assert.ok(calls.commands.some(c => c.file === '/sbin/mount' && c.args[0] === '-u' && c.args[1] === '-w'));
+});
+
+test('macOS read-only mount is accepted for reading (no remount)', () => {
+  const { backend, calls } = macFixture({ borrowed: true, readOnly: true });
+  const handle = backend.mountEsp(backend.listDevices()[0].partitions[0], { writable: false });
+  assert.equal(handle.mountDir, '/Volumes/USB EFI');
+  assert.equal(calls.remounts, 0);
+});
 
 test('macOS uses an identified EFI partition, not a mount point guessed from its name', () => {
   const { backend, calls } = macFixture();
