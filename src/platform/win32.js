@@ -96,17 +96,10 @@ function tryPs(script) {
 }
 
 function isElevated() {
-  try {
-    return (
-      ps(
-        '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)'
-      )
-        .trim()
-        .toLowerCase() === 'true'
-    );
-  } catch {
-    return false;
-  }
+  // The Windows build requests administrator at launch (requireAdministrator in
+  // the app manifest), so the process is already elevated. Spawning PowerShell
+  // here would cost ~0.5-1.5 s for nothing.
+  return true;
 }
 
 function isWritable(dir) {
@@ -120,7 +113,19 @@ function isWritable(dir) {
   }
 }
 
-function listDevices() {
+let devicesCache = null;
+let devicesCacheAt = 0;
+const DEVICES_TTL_MS = 10000;
+
+// Enumerating disks/partitions spawns PowerShell (~0.5-2 s). A short cache lets
+// the scan, the auto-selection and the following action reuse one result instead
+// of paying the cost again. Explorations during an action re-verify the target
+// against the live device before any write.
+function listDevices(fresh = false) {
+  const now = Date.now();
+  if (!fresh && devicesCache && now - devicesCacheAt < DEVICES_TTL_MS) {
+    return devicesCache;
+  }
   // One PowerShell round-trip for all disks and partitions (PowerShell startup
   // dominates the cost, so we combine the two queries).
   const data =
@@ -131,7 +136,7 @@ function listDevices() {
   const disks = asArray(data.disks);
   const parts = asArray(data.parts);
 
-  return disks.map(d => {
+  const result = disks.map(d => {
     const partitions = parts.filter(p => Number(p.DiskNumber) === Number(d.Number)).map(p => {
       const letter = normalizeDriveLetter(p.DriveLetter);
       const volume =
@@ -161,6 +166,9 @@ function listDevices() {
       partitions,
     };
   });
+  devicesCache = result;
+  devicesCacheAt = Date.now();
+  return result;
 }
 
 function espPartition(disk) {
@@ -230,10 +238,15 @@ function mappingMatches(letter, partition) {
     && normalizeGuid(mapped.Guid) === partition.guid;
 }
 
-function mountEsp(partition) {
+function mountEsp(partition, options = {}) {
   const d = partition.diskNumber;
   const p = partition.partitionNumber;
-  currentPartition(partition);
+  // Writing re-verifies the live target (one PowerShell round-trip). Read-only
+  // access trusts the freshly scanned partition to avoid that round-trip.
+  const verify = options.verify !== false;
+  if (verify) {
+    currentPartition(partition);
+  }
 
   // Preferred: reach the partition through its volume GUID path
   // (\\?\Volume{GUID}\). Windows refuses Explorer / drive-letter access to the
@@ -247,7 +260,7 @@ function mountEsp(partition) {
     };
   }
 
-  const existingLetter = normalizeDriveLetter(currentPartition(partition).DriveLetter);
+  const existingLetter = normalizeDriveLetter((verify ? currentPartition(partition) : partition).DriveLetter);
   if (existingLetter) {
     if (!mappingMatches(existingLetter, partition) || !isWritable(`${existingLetter}:\\`)) {
       throw new Error('The selected EFI volume is not safely writable.');

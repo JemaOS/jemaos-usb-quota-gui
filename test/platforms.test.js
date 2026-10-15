@@ -107,6 +107,24 @@ test('Windows reaches the ESP through its volume GUID path, without a drive lett
   assert.equal(calls.removed, 0);
 });
 
+test('read-only access (verify:false) skips the live re-verification round-trip', () => {
+  const { backend, calls } = windowsFixture();
+  const partition = backend.listDevices()[0].partitions[0];
+  const before = calls.commands.length;
+  const handle = backend.mountEsp(partition, { verify: false });
+  assert.equal(handle.mountDir, `\\\\?\\Volume{${GUID}}\\`);
+  assert.equal(calls.commands.length, before, 'no PowerShell round-trip for read-only access');
+});
+
+test('a write (verify default) re-verifies the live target before mounting', () => {
+  const { backend, calls } = windowsFixture();
+  const partition = backend.listDevices()[0].partitions[0];
+  const before = calls.commands.length;
+  backend.mountEsp(partition, { verify: true });
+  assert.ok(calls.commands.slice(before).some(c => typeof c === 'string' && c.includes('disk = ')),
+    'write path issues a live re-verification');
+});
+
 test('Windows falls back to a temporary drive letter when no volume path is available', () => {
   const { backend, calls } = windowsFixture({ noVolume: true });
   const partition = backend.listDevices()[0].partitions[0];

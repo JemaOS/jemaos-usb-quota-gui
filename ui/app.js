@@ -280,7 +280,10 @@ async function doInit() {
   try {
     const disk = state.devices.find(d => d.id === state.selected);
     const result = await invoke('init', { device: state.selected, identity: disk && disk.identity, limit });
-    await selectDevice(state.selected);
+    // Render the status straight from the verified (re-read) result instead of
+    // issuing another round-trip to re-read it.
+    state.status = { esp: result.esp, present: true, valid: result.valid, limit: result.limit, used: result.used };
+    renderStatus(state.status);
     showBanner(t('initOk', { limit: result.limit }), 'ok');
   } catch (error) {
     showBanner(error.message, 'error');

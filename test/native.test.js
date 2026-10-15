@@ -27,7 +27,8 @@ function mainFixture(platform, smoke = false) {
   const called = { operations: 0 };
   let window;
   const app = { commandLine: { appendSwitch: value => switches.push(value) },
-    disableHardwareAcceleration() {}, whenReady: () => ({ then: fn => fn() }), on() {}, exit() {} };
+    disableHardwareAcceleration() {}, whenReady: () => ({ then: fn => fn() }), on() {}, exit() {},
+    getPath: () => '/fixture/quota-jemaos.exe' };
   const electron = { app, ipcMain: { handle: (key, fn) => handlers.set(key, fn) },
     BrowserWindow: class {
       constructor(options) {
@@ -38,13 +39,17 @@ function mainFixture(platform, smoke = false) {
       }
       loadFile(filename) { called.file = filename; }
     } };
+  // On Windows the packaged app runs the elevated instance; mirror that here so
+  // the elevation check does not spawn PowerShell during tests.
+  const argv = smoke ? ['app', '--smoke-test']
+    : platform === 'win32' ? ['app', '--elevated'] : ['app'];
   load('electron/main.js', {
     electron,
     'node:fs': { existsSync: () => true },
     '../src/core/service': { resolveKey: () => '/fixture/key', scan: () => { called.operations++; return []; },
       show: () => { called.operations++; return {}; }, init: () => { called.operations++; return {}; } },
     '../src/platform': { platform, isElevated: () => false, needsElevation: true },
-  }, { process: { platform, argv: smoke ? ['app', '--smoke-test'] : ['app'] } });
+  }, { process: { platform, argv, env: {} } });
   const event = () => ({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
   return { handlers, switches, called, window, event };
 }

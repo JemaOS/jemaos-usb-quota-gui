@@ -29,7 +29,7 @@ function findDisk(device) {
   );
 }
 
-function withEsp({ device, identity }, fn) {
+function withEsp({ device, identity }, fn, options = {}) {
   const disk = findDisk(device);
   if (!disk) {
     throw new Error(`Device not found: ${device}`);
@@ -47,7 +47,7 @@ function withEsp({ device, identity }, fn) {
   if (!esp) {
     throw new Error(`No EFI System Partition found on ${device}`);
   }
-  const handle = platform.mountEsp(esp);
+  const handle = platform.mountEsp(esp, options);
   let operationError;
   try {
     return fn(handle.mountDir, esp);
@@ -65,6 +65,8 @@ function withEsp({ device, identity }, fn) {
 }
 
 function show({ device, identity, keyFile } = {}) {
+  // Read-only: reuse the freshly scanned device/partition (no re-verification
+  // round-trip). Writes always verify the live target first.
   return withEsp({ device, identity }, (mountDir, esp) => {
     const file = quota.quotaPath(mountDir);
     if (!fs.existsSync(file)) {
@@ -81,7 +83,7 @@ function show({ device, identity, keyFile } = {}) {
       limit: verified ? verified.limit : parsed.limit ?? null,
       used: verified ? verified.used : parsed.used ?? null,
     };
-  });
+  }, { verify: false });
 }
 
 function init({ device, identity, limit, keyFile } = {}) {
@@ -98,7 +100,7 @@ function init({ device, identity, limit, keyFile } = {}) {
       throw new Error('Post-write verification failed');
     }
     return { esp: esp.id, limit: verified.limit, used: verified.used, valid: true };
-  });
+  }, { verify: true });
 }
 
 module.exports = { scan, show, init, resolveKey, DEFAULT_KEY };

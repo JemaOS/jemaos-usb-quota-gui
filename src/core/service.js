@@ -23,7 +23,8 @@ const HELPER = path.join(__dirname, '..', '..', 'bin', 'jemaos-quota-priv.js');
 
 async function scan() {
   try {
-    return platform.listDevices();
+    // Explicit scan (app start / refresh button) always reads fresh state.
+    return platform.listDevices(true);
   } catch (error) {
     if (process.platform === 'win32' && error.code === 'ADMIN_REQUIRED') {
       return runPrivileged('scan', {});

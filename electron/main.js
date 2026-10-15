@@ -1,10 +1,12 @@
 // Copyright (c) 2026 The JemaOS Authors. All rights reserved.
 // Native Electron app: the renderer talks to the main process through IPC
-// (preload bridge). The privileged ESP work still uses the per-operation OS
-// elevator (pkexec / UAC / osascript).
+// (preload bridge). On Windows the app self-elevates once at launch so device
+// operations run directly; on Linux/macOS the privilege is delegated per
+// operation (pkexec / osascript).
 'use strict';
 
 const { app, BrowserWindow, ipcMain } = require('electron');
+const { execFileSync } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -15,6 +17,48 @@ const smokeTest = process.argv.includes('--smoke-test');
 const uiFile = path.join(__dirname, '..', 'ui', 'index.html');
 const uiUrl = pathToFileURL(uiFile).href;
 let mainWindow;
+
+function powershellPath() {
+  const root = process.env.SystemRoot || 'C:\\Windows';
+  return path.win32.join(root, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+}
+
+// The build may be produced on Linux, where electron-builder cannot embed a
+// requireAdministrator manifest into the exe. To guarantee that disk operations
+// have the required rights, we elevate once at startup instead of per operation
+// (the per-operation elevation was unreliable). Returns false when the user
+// cancels the UAC prompt, in which case the app quits.
+function ensureWindowsAdmin() {
+  if (process.platform !== 'win32' || smokeTest || process.argv.includes('--elevated')) {
+    return true;
+  }
+  const powershell = powershellPath();
+  const isAdmin =
+    '([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent())' +
+    '.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)';
+  try {
+    const out = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-Command', isAdmin], {
+      encoding: 'utf8', timeout: 15000, windowsHide: true,
+    });
+    if (out.trim().toLowerCase() === 'true') {
+      return true;
+    }
+  } catch {
+    /* fall through to the elevation attempt */
+  }
+  try {
+    const exe = app.getPath('exe').replace(/'/g, "''");
+    execFileSync(
+      powershell,
+      ['-NoProfile', '-NonInteractive', '-Command',
+        `Start-Process -FilePath '${exe}' -ArgumentList '--elevated' -Verb RunAs`],
+      { encoding: 'utf8', timeout: 15000, windowsHide: true }
+    );
+  } catch {
+    /* the user dismissed the UAC prompt */
+  }
+  return false;
+}
 
 // Linux compatibility: some systems lack a properly set-up setuid chrome-sandbox
 // or disable unprivileged user namespaces, which makes Electron refuse to start.
@@ -130,6 +174,10 @@ function createWindow() {
 }
 
 app.whenReady().then(() => {
+  if (!ensureWindowsAdmin()) {
+    app.quit();
+    return;
+  }
   registerIpc();
   createWindow();
   app.on('activate', () => {
