@@ -10,6 +10,8 @@ const os = require('node:os');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 
+const espVolume = require('../core/esp-volume');
+
 const EFI_GUID = 'c12a7328-f81f-11d2-ba4b-00a0c93ec93b';
 
 function run(cmd, args) {
@@ -104,29 +106,55 @@ function espPartition(disk) {
   return disk ? disk.partitions.find(p => p.esp) || null : null;
 }
 
-function mountEsp(partition) {
+// When mounting is not permitted (ChromiumOS/ChromeOS containers block mount(2)
+// by design), fall back to accessing the FAT filesystem directly through mtools,
+// which needs no mount. Requires the mtools package.
+function useMtoolsOrThrow(partition, cause) {
+  if (!espVolume.mtoolsAvailable()) {
+    throw new Error(
+      `Cannot access ${partition.path}: ${cause}. Mounting is not permitted in this ` +
+      'environment (ChromiumOS/ChromeOS containers block mounting by design). ' +
+      "Install 'mtools' (for example: sudo apt install mtools) so the EFI partition " +
+      'can be read and written without mounting.'
+    );
+  }
+  return { mountDir: null, owned: false, mtools: partition.path };
+}
+
+function mountEsp(partition, options = {}) {
+  const writable = options.writable !== false;
+
   // 1) Already mounted: try to make it writable in place.
   if (partition.mountpoint) {
     tryRun('mount', ['-o', 'remount,rw', partition.mountpoint]);
     if (isWritable(partition.mountpoint)) {
       return { mountDir: partition.mountpoint, owned: false };
     }
+    if (!writable && fs.existsSync(partition.mountpoint)) {
+      // A read-only mount is enough for reading the counter.
+      return { mountDir: partition.mountpoint, owned: false };
+    }
+    return useMtoolsOrThrow(partition, 'partition is mounted but not writable');
   }
+
   // 2) Mount somewhere private.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'jemaos-esp-'));
   const first = tryRun('mount', ['-o', 'rw', partition.path, dir]);
   if (!first.ok) {
     const second = tryRun('mount', [partition.path, dir]);
     if (!second.ok) {
-      fs.rmdirSync(dir);
-      throw new Error(`Mount failed for ${partition.path}: ${(second.error || first.error).message}`);
+      tryRun('umount', [dir]);
+      try { fs.rmdirSync(dir); } catch { /* not created */ }
+      return useMtoolsOrThrow(partition, (second.error || first.error).message);
     }
     tryRun('mount', ['-o', 'remount,rw', dir]);
   }
-  if (!isWritable(dir)) {
+  if (writable && !isWritable(dir)) {
     const cleanup = tryRun('umount', [dir]);
-    if (cleanup.ok) fs.rmdirSync(dir);
-    throw new Error(`ESP ${partition.path} mounted but not writable`);
+    if (cleanup.ok) {
+      try { fs.rmdirSync(dir); } catch { /* not created */ }
+    }
+    return useMtoolsOrThrow(partition, 'partition mounted but not writable');
   }
   return { mountDir: dir, owned: true };
 }

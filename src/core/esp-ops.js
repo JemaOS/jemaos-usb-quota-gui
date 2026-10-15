@@ -4,11 +4,11 @@
 // or through the elevated helper (bin/jemaos-quota-priv.js via pkexec/UAC).
 'use strict';
 
-const fs = require('node:fs');
 const path = require('node:path');
 
 const platform = require('../platform');
 const quota = require('./quota');
+const espVolume = require('./esp-volume');
 const { loadKey } = require('./crypto');
 
 // The key is shipped in `asarUnpack`, so it exists as a real file under
@@ -38,6 +38,16 @@ function findDisk(device) {
   );
 }
 
+// Build a read/write volume for the counter file. Normally this is a mount
+// point; when mounting is not permitted (ChromiumOS/ChromeOS container) the
+// adapter exposes the raw partition and we go through mtools instead.
+function makeVolume(handle) {
+  if (handle && handle.mtools) {
+    return espVolume.mtools(handle.mtools);
+  }
+  return espVolume.fsVolume(handle.mountDir);
+}
+
 function withEsp({ device, identity }, fn, options = {}) {
   const disk = findDisk(device);
   if (!disk) {
@@ -57,9 +67,10 @@ function withEsp({ device, identity }, fn, options = {}) {
     throw new Error(`No EFI System Partition found on ${device}`);
   }
   const handle = platform.mountEsp(esp, options);
+  const volume = makeVolume(handle);
   let operationError;
   try {
-    return fn(handle.mountDir, esp);
+    return fn(volume, esp);
   } catch (error) {
     operationError = error;
     throw error;
@@ -76,12 +87,11 @@ function withEsp({ device, identity }, fn, options = {}) {
 function show({ device, identity, keyFile } = {}) {
   // Read-only: reuse the freshly scanned device/partition (no re-verification
   // round-trip). Writes always verify the live target first.
-  return withEsp({ device, identity }, (mountDir, esp) => {
-    const file = quota.quotaPath(mountDir);
-    if (!fs.existsSync(file)) {
+  return withEsp({ device, identity }, (volume, esp) => {
+    if (!volume.exists(quota.QUOTA_REL)) {
       return { esp: esp.id, present: false, valid: false };
     }
-    const content = fs.readFileSync(file, 'utf8');
+    const content = volume.read(quota.QUOTA_REL);
     const key = loadKey(resolveKey(keyFile));
     const verified = quota.verify(content, key);
     const parsed = quota.parse(content) || {};
@@ -100,11 +110,10 @@ function init({ device, identity, limit, keyFile } = {}) {
   if (!(typeof limit === 'number' || typeof limit === 'string' && /^\d+$/.test(limit)) || !Number.isSafeInteger(n) || n < 0) {
     throw new Error('limit must be a non-negative integer');
   }
-  return withEsp({ device, identity }, (mountDir, esp) => {
+  return withEsp({ device, identity }, (volume, esp) => {
     const key = loadKey(resolveKey(keyFile));
-    const file = quota.quotaPath(mountDir);
-    quota.writeAtomic(file, quota.render(n, 0, key));
-    const verified = quota.verify(fs.readFileSync(file, 'utf8'), key);
+    volume.write(quota.QUOTA_REL, quota.render(n, 0, key));
+    const verified = quota.verify(volume.read(quota.QUOTA_REL), key);
     if (!verified) {
       throw new Error('Post-write verification failed');
     }

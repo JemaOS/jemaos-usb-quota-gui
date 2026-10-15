@@ -72,6 +72,9 @@ function quotaPath(espMount) {
   return path.join(espMount, ESP_SUBDIR, QUOTA_NAME);
 }
 
+/** Path of the counter file relative to the FAT root (e.g. for mtools). */
+const QUOTA_REL = `${ESP_SUBDIR}/${QUOTA_NAME}`;
+
 /** Create parent dirs and write atomically (temp file + fsync + rename). */
 function writeAtomic(filePath, content) {
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -89,6 +92,7 @@ function writeAtomic(filePath, content) {
 module.exports = {
   QUOTA_NAME,
   ESP_SUBDIR,
+  QUOTA_REL,
   HEADER,
   sign,
   render,

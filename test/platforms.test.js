@@ -84,6 +84,44 @@ test('Linux does not crash when blkid is not permitted (scan then elevates)', ()
   assert.ok(disk.partitions.some(p => !p.partType));
 });
 
+// ChromeOS/Crostini blocks mount(2) by design, even as root. When mount fails,
+// the Linux backend must fall back to mtools (no mount) instead of erroring.
+function linuxMountFixture(config = {}) {
+  const calls = [];
+  const execFileSync = (file, args) => {
+    calls.push([file, args]);
+    if (file === 'mount') throw new Error('mount: /tmp/x: permission denied.');
+    if (file === 'umount') return '';
+    return '';
+  };
+  const backend = load('src/platform/linux.js', {
+    'node:child_process': { execFileSync },
+    'node:fs': { mkdtempSync: () => '/tmp/jemaos-esp-fixture', rmdirSync() {}, existsSync: () => false },
+    '../core/esp-volume': {
+      mtoolsAvailable: () => config.mtools !== false,
+      fsVolume: () => ({ kind: 'fs' }),
+      mtools: () => ({ kind: 'mtools' }),
+    },
+  });
+  return { backend, calls };
+}
+
+test('Linux falls back to mtools when mount is not permitted (container)', () => {
+  const { backend } = linuxMountFixture();
+  const handle = backend.mountEsp({ path: '/dev/sda12', mountpoint: null }, { writable: true });
+  assert.equal(handle.mountDir, null);
+  assert.equal(handle.mtools, '/dev/sda12');
+  assert.equal(handle.owned, false, 'nothing to unmount for the mtools handle');
+});
+
+test('Linux explains how to fix it when mount is blocked and mtools is missing', () => {
+  const { backend } = linuxMountFixture({ mtools: false });
+  assert.throws(
+    () => backend.mountEsp({ path: '/dev/sda12', mountpoint: null }, { writable: true }),
+    /mtools/
+  );
+});
+
 test('Windows normalizes the USB bus, Char16 drive letters and EFI GUID', () => {
   assert.equal(windows.normalizeBus(7), 'USB');
   assert.equal(windows.normalizeBus('USB'), 'USB');
