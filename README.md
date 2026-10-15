@@ -157,9 +157,11 @@ The target is verified before and after mounting, and the app fails closed:
   verified to belong to the expected partition.
 - Linux mounts read-write or remounts, and probes for write access before writing.
 - macOS re-reads `diskutil` state and only unmounts what it mounted.
-- Windows assigns a temporary access path, verifies the mapping matches the
-  selected partition, probes write access, and removes only what it created. It
-  never changes GPT attributes.
+- Windows reaches the ESP through its **volume GUID path** (`\\?\Volume{…}\`),
+  which works even though Windows refuses drive-letter/Explorer access to the EFI
+  System Partition. It falls back to a temporary drive letter (verified against
+  the selected partition) only when no volume path is available, and removes
+  only what it created. It never changes GPT attributes.
 
 ---
 

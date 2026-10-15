@@ -42,6 +42,7 @@ function windowsFixture(config = {}) {
   const part = { DiskNumber: 2, PartitionNumber: 12, Size: 32e6, Offset: 4000000,
     Guid: GUID, GptType: EFI, DriveLetter: '\u0000', Type: 'System' };
   const volume = `\\\\?\\Volume{${GUID}}\\`;
+  const accessPaths = config.noVolume ? [] : [volume];
   const childProcess = {
     execFileSync: (file, args) => {
       if (file.endsWith('mountvol.exe')) {
@@ -53,15 +54,15 @@ function windowsFixture(config = {}) {
       const script = Buffer.from(args.at(-1), 'base64').toString('utf16le');
       calls.commands.push(script);
       if (script.includes('Get-Disk |')) return JSON.stringify(disk);
-      if (script.includes('Get-Partition |')) return JSON.stringify(config.wrongGuid ? { ...part, GptType: GUID } : part);
+      if (script.includes('Get-Partition |')) return JSON.stringify({ ...part, AccessPaths: accessPaths, GptType: config.wrongGuid ? GUID : EFI });
       if (script.includes('GetLogicalDrives')) return JSON.stringify(['C:\\', 'Z:\\']);
       if (script.includes('Get-Disk -Number')) return JSON.stringify(disk);
       if (script.includes('Get-Partition -DriveLetter')) {
         if (config.wrongVolume || race) return JSON.stringify({ ...part, DiskNumber: 9 });
         return mapped ? JSON.stringify({ ...part, DriveLetter: 'Y' }) : '';
       }
-      if (script.includes('.AccessPaths')) return '[]';
-      if (script.includes('Get-Volume -Partition')) return JSON.stringify(volume);
+      if (script.includes('.AccessPaths')) return JSON.stringify(accessPaths);
+      if (script.includes('Get-Volume -Partition')) return config.noVolume ? '' : JSON.stringify(volume);
       if (script.includes('Get-Partition -DiskNumber')) return JSON.stringify({ ...part, DriveLetter: mapped ? 'Y' : '\u0000' });
       if (script.includes('Set-Partition') || script.includes('Add-PartitionAccessPath')) {
         if (config.storageDenied || config.wrongVolume) throw new Error('assignment refused');
@@ -82,6 +83,7 @@ function windowsFixture(config = {}) {
       calls.probes.push(file);
       assert.equal(options.flag, 'wx');
       if (config.probeError) throw new Error('read only fixture');
+      if (config.volumeReadOnly && String(file).includes('Volume{')) throw new Error('volume read-only fixture');
     }, unlinkSync() {} },
   });
   return { backend, calls, race: () => { race = true; } };
@@ -92,38 +94,49 @@ test('a contradictory System type never substitutes for the EFI GUID', () => {
   assert.equal(backend.listDevices()[0].partitions[0].esp, false);
 });
 
-test('Windows selects a truly free letter and verifies the exact partition before probing', () => {
+test('Windows reaches the ESP through its volume GUID path, without a drive letter', () => {
   const { backend, calls } = windowsFixture();
+  const partition = backend.listDevices()[0].partitions[0];
+  const handle = backend.mountEsp(partition);
+  assert.equal(handle.mountDir, `\\\\?\\Volume{${GUID}}\\`);
+  assert.equal(handle.owned, false);
+  assert.ok(!calls.commands.some(c => typeof c === 'string' && c.includes('-NewDriveLetter')));
+  backend.unmountEsp(handle);
+  assert.equal(calls.removed, 0);
+});
+
+test('Windows falls back to a temporary drive letter when no volume path is available', () => {
+  const { backend, calls } = windowsFixture({ noVolume: true });
   const partition = backend.listDevices()[0].partitions[0];
   const handle = backend.mountEsp(partition);
   assert.equal(handle.mountDir, 'Y:\\');
   assert.equal(calls.probes.length, 1);
-  assert.ok(calls.commands.some(command => typeof command === 'string' && command.includes('-NewDriveLetter Y')));
+  assert.ok(calls.commands.some(c => typeof c === 'string' && c.includes('-NewDriveLetter Y')));
   backend.unmountEsp(handle);
   assert.equal(calls.removed, 1);
 });
 
 test('wrong drive mapping can never receive a probe or be removed', () => {
-  const { backend, calls } = windowsFixture({ wrongVolume: true });
+  const { backend, calls } = windowsFixture({ noVolume: true, wrongVolume: true });
   const partition = backend.listDevices()[0].partitions[0];
   assert.throws(() => backend.mountEsp(partition), /unverified volume/);
   assert.equal(calls.probes.length, 0);
   assert.equal(calls.removed, 0);
 });
 
-test('Windows fallback passes the selected volume GUID to mountvol as a single native argument', () => {
-  const { backend, calls } = windowsFixture({ storageDenied: true });
+test('mountvol fallback passes the selected volume GUID as a single native argument', () => {
+  const { backend, calls } = windowsFixture({ volumeReadOnly: true, storageDenied: true });
   const partition = backend.listDevices()[0].partitions[0];
   const handle = backend.mountEsp(partition);
   assert.equal(handle.mountDir, 'Y:\\');
-  const native = calls.commands.find(command => command.native);
+  const native = calls.commands.find(c => c.native);
   assert.equal(native.args[0], 'Y:');
   assert.equal(native.args.length, 2);
-  assert.ok(!calls.commands.some(command => command.native && command.args.includes('/S')));
+  assert.ok(!calls.commands.some(c => c.native && c.args.includes('/S')));
 });
 
 test('a drive mapping changed after mount is not removed', () => {
-  const fixture = windowsFixture();
+  const fixture = windowsFixture({ noVolume: true });
   const handle = fixture.backend.mountEsp(fixture.backend.listDevices()[0].partitions[0]);
   fixture.race();
   assert.throws(() => fixture.backend.unmountEsp(handle), /refusing/);
@@ -131,15 +144,16 @@ test('a drive mapping changed after mount is not removed', () => {
 });
 
 test('Windows cleans a newly acquired mount after write access fails', () => {
-  const { backend, calls } = windowsFixture({ probeError: true });
+  const { backend, calls } = windowsFixture({ noVolume: true, probeError: true });
   assert.throws(() => backend.mountEsp(backend.listDevices()[0].partitions[0]), /read-only/);
   assert.equal(calls.removed, 1);
 });
 
 test('Windows never removes a borrowed pre-existing mount', () => {
-  const { backend, calls } = windowsFixture({ borrowed: true });
+  const { backend, calls } = windowsFixture({ noVolume: true, borrowed: true });
   const handle = backend.mountEsp(backend.listDevices()[0].partitions[0]);
   assert.equal(handle.owned, false);
+  assert.equal(handle.mountDir, 'Y:\\');
   backend.unmountEsp(handle);
   assert.equal(calls.removed, 0);
 });

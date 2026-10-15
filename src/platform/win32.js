@@ -126,13 +126,15 @@ function listDevices() {
   );
   const parts = asArray(
     psJson(
-      'Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem'
+      'Get-Partition | Select-Object DiskNumber,PartitionNumber,Size,Offset,Guid,GptType,DriveLetter,Type,IsBoot,IsSystem,AccessPaths'
     )
   );
 
   return disks.map(d => {
     const partitions = parts.filter(p => Number(p.DiskNumber) === Number(d.Number)).map(p => {
       const letter = normalizeDriveLetter(p.DriveLetter);
+      const volume =
+        asArray(p.AccessPaths).find(x => typeof x === 'string' && x.startsWith('\\\\?\\Volume{')) || null;
       return {
         id: `${p.DiskNumber}:${p.PartitionNumber}`,
         diskNumber: Number(p.DiskNumber),
@@ -144,6 +146,7 @@ function listDevices() {
         offset: Number(p.Offset) || 0,
         partType: normalizeGuid(p.GptType),
         driveLetter: letter,
+        volume,
         mountpoint: letter ? `${letter}:\\` : null,
         esp: normalizeGuid(p.GptType) === EFI_GUID,
       };
@@ -223,8 +226,21 @@ function mappingMatches(letter, partition) {
 function mountEsp(partition) {
   const d = partition.diskNumber;
   const p = partition.partitionNumber;
-  const actual = currentPartition(partition);
-  const existingLetter = normalizeDriveLetter(actual.DriveLetter);
+  currentPartition(partition);
+
+  // Preferred: reach the partition through its volume GUID path
+  // (\\?\Volume{GUID}\). Windows refuses Explorer / drive-letter access to the
+  // EFI System Partition ("Access is denied"), but the volume path works.
+  const volume = partition.volume || volumePath(d, p);
+  if (volume && isWritable(volume)) {
+    return {
+      mountDir: volume,
+      owned: false,
+      handle: { partition, letter: null, volume },
+    };
+  }
+
+  const existingLetter = normalizeDriveLetter(currentPartition(partition).DriveLetter);
   if (existingLetter) {
     if (!mappingMatches(existingLetter, partition) || !isWritable(`${existingLetter}:\\`)) {
       throw new Error('The selected EFI volume is not safely writable.');
@@ -232,13 +248,13 @@ function mountEsp(partition) {
     return {
       mountDir: `${existingLetter}:\\`,
       owned: false,
-      handle: { partition, letter: existingLetter },
+      handle: { partition, letter: existingLetter, volume: null },
     };
   }
 
   const letter = freeDriveLetter();
   const accessPath = `${letter}:\\`;
-  const handle = { mountDir: accessPath, owned: true, handle: { partition, letter } };
+  const handle = { mountDir: accessPath, owned: true, handle: { partition, letter, volume: null } };
   const strategies = [
     () => tryPs(`Set-Partition -DiskNumber ${d} -PartitionNumber ${p} -NewDriveLetter ${letter}`),
     () => tryPs(`Add-PartitionAccessPath -DiskNumber ${d} -PartitionNumber ${p} -AccessPath ${quote(accessPath)}`),
@@ -272,7 +288,8 @@ function mountEsp(partition) {
 }
 
 function unmountEsp(handle) {
-  if (!handle || !handle.owned || !handle.handle) {
+  // Volume-path access assigns nothing, so there is nothing to release.
+  if (!handle || !handle.handle || !handle.owned || !handle.handle.letter) {
     return;
   }
   const { partition, letter } = handle.handle;
